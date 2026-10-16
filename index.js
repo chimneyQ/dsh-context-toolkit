@@ -262,9 +262,22 @@ export function apply(ctx, rawConfig) {
 /** Names whose whole purpose is to pour raw bytes into the conversation. */
 const FLOOD_TOOLS = new Set(['curl', 'wget', 'httpie', 'http', 'aria2c'])
 
+/**
+ * Every tool name that runs a shell command, so the gate can read its `command`.
+ *
+ * This list is the gate's blind spot if it drifts: a host name that is absent here
+ * is simply not inspected, and the flood tools run unchecked through it. `ops_bash`
+ * is the live example - dsh-ops publishes it (and does not publish `bash` at all),
+ * so before this list existed `curl` through `ops_bash` slipped past a gate that
+ * was refusing the identical command through `pwsh`.
+ *
+ * Add a name here when a shell tool appears; the other branches key off this set.
+ */
+const SHELL_TOOL_NAMES = new Set(['bash', 'pwsh', 'shell', 'ops_bash', 'bash_persistent', 'pwsh_persistent'])
+
 function floodReason(toolName, args) {
   const command = typeof args.command === 'string' ? args.command : ''
-  if (toolName !== 'bash' && toolName !== 'pwsh' && toolName !== 'shell') return undefined
+  if (!SHELL_TOOL_NAMES.has(toolName)) return undefined
   for (const word of FLOOD_TOOLS) {
     if (new RegExp('(^|[ \\t;&|(])' + word + '([ \\t;&|)]|$)', 'i').test(command)) {
       return 'dsh-context-toolkit: "' + word + '" pours whole responses into the transcript. '
@@ -312,7 +325,7 @@ function registerRoutingGate(ctx, config, stats) {
         }
       }
 
-      if ((toolName === 'bash' || toolName === 'pwsh') && config.bashNudgeMinCommandBytes > 0) {
+      if (SHELL_TOOL_NAMES.has(toolName) && config.bashNudgeMinCommandBytes > 0) {
         const command = typeof args.command === 'string' ? args.command : ''
         if (command.length > config.bashNudgeMinCommandBytes) {
           const reason = 'dsh-context-toolkit: this command is about ' + command.length

@@ -195,9 +195,20 @@ check('the guard still denies a flood tool with a non-empty reason', () => {
 const gate = handlers['tools/pre-execute']
 const next = async () => ({ kind: 'next' })
 const denies = async (command) => (await gate({ name: 'pwsh', arguments: { command } }, next)).kind === 'deny'
+/** The same denial probe, for a named shell tool rather than the fixed 'pwsh'. */
+const deniesName = async (name, command) => (await gate({ name, arguments: { command } }, next)).kind === 'deny'
+
 await checkAsync('curl and wget are refused', async () => {
   assert.equal(await denies('curl https://example.com'), true)
   assert.equal(await denies('wget https://example.com'), true)
+  // A gate that only recognises the shell names it shipped with has a blind spot:
+  // dsh-ops publishes `ops_bash` (and no `bash`), so `curl` through it slipped past
+  // a gate that refused the same command through `pwsh`. Every shell name must be
+  // inspected, whatever the tool is called.
+  assert.equal(await deniesName('ops_bash', 'curl https://example.com'), true, 'ops_bash bypasses the gate')
+  assert.equal(await deniesName('ops_bash', 'wget https://example.com'), true, 'ops_bash bypasses the gate (wget)')
+  assert.equal(await deniesName('bash_persistent', 'curl https://example.com'), true, 'bash_persistent bypasses the gate')
+
   assert.equal(await denies('echo hi | curl -s https://x'), true)
 })
 await checkAsync('ordinary commands are not refused', async () => {
@@ -209,8 +220,15 @@ await checkAsync('a word merely containing a flood tool name is not refused', as
   assert.equal(await denies('echo curler'), false)
 })
 await checkAsync('a whole-file read over the threshold is nudged', async () => {
-  const r = await gate({ name: 'read', arguments: { file_path: big } }, async () => ({ kind: 'ask' }))
-  assert.notEqual(r.kind, 'next', 'oversized read was not flagged')
+  // Same trap as the nudge above: with no approval service the handler calls next(),
+  // so passing a next() that returns 'ask' made this pass whether or not it fired.
+  const saved = mockCtx.get
+  mockCtx.get = (name) => (name === 'approval' ? {} : undefined)
+  try {
+    const r = await gate({ name: 'read', arguments: { file_path: big } }, next)
+    assert.equal(r.kind, 'ask', 'oversized read was not flagged')
+    assert.ok(/bytes/.test(String(r.reason)), 'the refusal omits the size')
+  } finally { mockCtx.get = saved }
 })
 await checkAsync('a bounded read is left alone', async () => {
   const r = await gate({ name: 'read', arguments: { file_path: big, offset: 1, limit: 5 } }, next)
@@ -219,6 +237,33 @@ await checkAsync('a bounded read is left alone', async () => {
 await checkAsync('an exempt basename is left alone', async () => {
   const r = await gate({ name: 'read', arguments: { file_path: join(workDir, 'package.json') } }, next)
   assert.equal(r.kind, 'next')
+})
+
+// The nudge branches only *ask* when an approval service exists; without one they
+// call next(), so a probe that only inspects the return value sees the same thing
+// either way. These swap in an approval service to observe the decision itself -
+// which is how the ops_bash blind spot was caught: the identical long command was
+// refused through pwsh and silent through ops_bash.
+await checkAsync('a long command through every shell name is nudged', async () => {
+  const saved = mockCtx.get
+  mockCtx.get = (name) => (name === 'approval' ? {} : undefined)
+  try {
+    for (const shell of ['pwsh', 'bash', 'ops_bash', 'bash_persistent']) {
+      const r = await gate({ name: shell, arguments: { command: 'echo ' + 'A'.repeat(5000) } }, next)
+      assert.equal(r.kind, 'ask', shell + ' escapes the long-command nudge')
+      assert.ok(/bytes/.test(String(r.reason)), shell + ': the nudge reason omits the size')
+    }
+  } finally { mockCtx.get = saved }
+})
+await checkAsync('a short command is not nudged through any shell name', async () => {
+  const saved = mockCtx.get
+  mockCtx.get = (name) => (name === 'approval' ? {} : undefined)
+  try {
+    for (const shell of ['pwsh', 'ops_bash']) {
+      const r = await gate({ name: shell, arguments: { command: 'echo hi' } }, next)
+      assert.equal(r.kind, 'next', shell + ' was nudged for a short command')
+    }
+  } finally { mockCtx.get = saved }
 })
 
 console.log('== 9. knowledge base ==')
