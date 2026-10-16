@@ -1,0 +1,2 @@
+# Ship the files byte-for-byte so a checkout on any platform reproduces them.
+* -text
