@@ -264,7 +264,7 @@ const FLOOD_TOOLS = new Set(['curl', 'wget', 'httpie', 'http', 'aria2c'])
 
 function floodReason(toolName, args) {
   const command = typeof args.command === 'string' ? args.command : ''
-  if (toolName !== 'bash' && toolName !== 'pwsh' && toolName !== 'shell') return null
+  if (toolName !== 'bash' && toolName !== 'pwsh' && toolName !== 'shell') return undefined
   for (const word of FLOOD_TOOLS) {
     if (new RegExp('(^|[ \\t;&|(])' + word + '([ \\t;&|)]|$)', 'i').test(command)) {
       return 'dsh-context-toolkit: "' + word + '" pours whole responses into the transcript. '
@@ -272,7 +272,7 @@ function floodReason(toolName, args) {
         + 'ctk_execute(language:"javascript", code) and print only the conclusion.'
     }
   }
-  return null
+  return undefined
 }
 
 /** The flood tool a command line invoked, for the ledger's per-tool counters. */

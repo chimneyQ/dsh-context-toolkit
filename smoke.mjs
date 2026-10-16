@@ -164,6 +164,34 @@ check('the gate is mounted and guards are registered', () => {
   assert.equal(typeof handlers['tools/pre-execute'], 'function')
   assert.ok(guards.length >= 1, 'no monotonic guard')
 })
+// The host reads a guard's return as: undefined = allow, anything else = deny.
+// dsh-tools/lib/index.js guardReason(): `if (reason !== void 0) return reason`.
+// A guard returning null therefore denies EVERY tool call with a null reason —
+// which is what surfaced as a bare `Error: null` on run_code at boot. The
+// assertion above only proves a guard was *registered*, never *invoked*, so this
+// regression slipped through the whole suite.
+check('the guard allows an ordinary tool (undefined, not null)', () => {
+  assert.ok(guards.length >= 1, 'no monotonic guard')
+  for (const guard of guards) {
+    const reason = guard({ name: 'run_code', arguments: { code: 'return 1' } })
+    assert.strictEqual(reason, undefined,
+      'guard must return undefined to allow; got ' + JSON.stringify(reason)
+      + ' — the host denies whenever reason !== undefined')
+  }
+})
+check('the guard allows a non-flood shell command and a read', () => {
+  for (const guard of guards) {
+    assert.strictEqual(guard({ name: 'pwsh', arguments: { command: 'dir' } }), undefined)
+    assert.strictEqual(guard({ name: 'read', arguments: { file_path: 'package.json' } }), undefined)
+  }
+})
+check('the guard still denies a flood tool with a non-empty reason', () => {
+  for (const guard of guards) {
+    const reason = guard({ name: 'bash', arguments: { command: 'curl https://example.com' } })
+    assert.equal(typeof reason, 'string')
+    assert.ok(reason.length > 0)
+  }
+})
 const gate = handlers['tools/pre-execute']
 const next = async () => ({ kind: 'next' })
 const denies = async (command) => (await gate({ name: 'pwsh', arguments: { command } }, next)).kind === 'deny'
