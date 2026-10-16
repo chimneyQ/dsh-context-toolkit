@@ -36,6 +36,12 @@
 
 ## 安装
 
+从 npm 安装（推荐）：
+
+```bash
+dsh plugin --profile desktop add dsh-context-toolkit
+```
+
 从 GitHub 安装：
 
 ```bash

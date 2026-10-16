@@ -36,6 +36,12 @@ It separates *raw bytes* from *conclusions*: commands run in a child process, fi
 
 ## Install
 
+From npm (recommended):
+
+```bash
+dsh plugin --profile desktop add dsh-context-toolkit
+```
+
 From GitHub:
 
 ```bash
