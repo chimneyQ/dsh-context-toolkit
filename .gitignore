@@ -1,0 +1,4 @@
+node_modules/
+.smoke-*/
+.smoke-state/
+*.log

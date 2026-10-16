@@ -1,0 +1,14 @@
+# dsh-context-toolkit bundle patch
+#
+# Registers ctk_* tools natively through the harness tools service.
+# No child MCP process, no mcp__ prefix.
+#
+# Every value below is validated against the plugin's Config schema; the full
+# set of controls and their meaning is documented in README.md.
+- insert:
+    - id: dsh-context-toolkit
+      name: 'dsh-context-toolkit'
+      config:
+        routing: true
+        denyCurlWget: true
+        caPemPath: 'auto'
