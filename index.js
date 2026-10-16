@@ -296,26 +296,95 @@ const FLOOD_TOOLS = new Set(['curl', 'wget', 'httpie', 'http', 'aria2c'])
  */
 const SHELL_TOOL_NAMES = new Set(['bash', 'pwsh', 'shell', 'ops_bash', 'bash_persistent', 'pwsh_persistent'])
 
-function floodReason(toolName, args) {
-  const command = typeof args.command === 'string' ? args.command : ''
-  if (!SHELL_TOOL_NAMES.has(toolName)) return undefined
-  for (const word of FLOOD_TOOLS) {
-    if (new RegExp('(^|[ \\t;&|(])' + word + '([ \\t;&|)]|$)', 'i').test(command)) {
-      return 'dsh-context-toolkit: "' + word + '" pours whole responses into the transcript. '
-        + 'Use ctk_fetch_and_index(url, source) and then ctk_search(queries), or run it inside '
-        + 'ctk_execute(language:"javascript", code) and print only the conclusion.'
-    }
-  }
-  return undefined
+/**
+ * Words that may legally precede the real command word inside one segment.
+ *
+ * Without them `sudo curl …` reads as a command called "sudo" and sails through.
+ * The list stays short on purpose: anything longer turns into a shell parser, and a
+ * parser that gets it wrong either blocks an innocent call or waves a real one past.
+ */
+const EXEC_PREFIXES = new Set(['!', 'sudo', 'command', 'exec', 'nohup', 'time', 'env', 'busybox'])
+
+/**
+ * Split a command line at every operator that starts a new command.
+ *
+ * Testing the whole line for a flood tool failed in both directions: it missed a
+ * real invocation that was not the leading word statement (`cat big | curl -T -
+ * https://x`, `body=$(curl -s https://x)`), and every attempt to widen the pattern
+ * to catch those widened what innocent text could match. Splitting first makes the
+ * question exact — is a flood tool the *command word* of some segment?
+ */
+function commandSegments(command) {
+  return String(command || '')
+    .split(/\|\||&&|[|;&\n]|\$\(|`|\{|\}/)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
 }
 
-/** The flood tool a command line invoked, for the ledger's per-tool counters. */
+/** The command word of a segment, with leading quotes and exec prefixes removed. */
+function leadingWord(segment) {
+  const tokens = segment.split(/\s+/).filter(Boolean)
+  let i = 0
+  while (i < tokens.length && i < 2 && EXEC_PREFIXES.has(tokens[i].toLowerCase().replace(/^!+/, ''))) i += 1
+  return (tokens[i] || '').replace(/^[\"']+|[\"']+$/g, '')
+}
+
+/** Normalise a command word to the plain tool name (`C:\bin\curl.exe` -> `curl`). */
+function floodNameOf(word) {
+  return baseNameOf(word).toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, '')
+}
+
+/**
+ * The flood tool a command line invokes, or 'other' when it invokes none.
+ *
+ * Only the command word of a segment counts, so `echo curl-config` and a message
+ * that merely contains "wget" stay legal, while `… | curl -s https://x` and
+ * `C:\Tools\curl.exe https://x` are refused.
+ */
 export function floodToolName(command) {
-  const text = String(command || '')
-  for (const word of FLOOD_TOOLS) {
-    if (new RegExp('(^|[ \\t;&|(])' + word + '([ \\t;&|)]|$)', 'i').test(text)) return word
+  for (const segment of commandSegments(command)) {
+    const word = leadingWord(segment)
+    if (word && FLOOD_TOOLS.has(floodNameOf(word))) return floodNameOf(word)
   }
   return 'other'
+}
+
+/**
+ * How much of a script file the gate is willing to read.
+ *
+ * A script is inspected to answer "what will run"; it is not the thing being judged,
+ * so the read is bounded rather than slurping a large file on every shell call.
+ */
+const SCRIPT_READ_MAX = 256 * 1024
+
+/**
+ * The text a shell call will actually run.
+ *
+ * `ops_bash` runs a *file* when it is given `script_path` instead of `command`, and a
+ * gate that reads only `command` therefore sees nothing at all for that call. That is
+ * the same bypass the shell-name list fixed, one field over: whichever field carries
+ * the payload, the gate has to follow it.
+ */
+function shellTextOf(args) {
+  const parts = []
+  if (typeof args.command === 'string') parts.push(args.command)
+  if (typeof args.script_path === 'string' && args.script_path.trim()) {
+    try {
+      const st = statSync(args.script_path)
+      if (st.isFile()) parts.push(readFileSync(args.script_path, 'utf8').slice(0, SCRIPT_READ_MAX))
+    } catch { /* an unreadable script is the shell tool's error to report, not the gate's */ }
+  }
+  return parts.join('\n')
+}
+
+function floodReason(toolName, args, text) {
+  if (!SHELL_TOOL_NAMES.has(toolName)) return undefined
+  const command = text === undefined ? shellTextOf(args) : text
+  const word = floodToolName(command)
+  if (word === 'other') return undefined
+  return 'dsh-context-toolkit: "' + word + '" pours whole responses into the transcript. '
+    + 'Use ctk_fetch_and_index(url, source) and then ctk_search(queries), or run it inside '
+    + 'ctk_execute(language:"javascript", code) and print only the conclusion.'
 }
 
 function hasService(ctx, serviceName) {
@@ -336,18 +405,25 @@ function registerRoutingGate(ctx, config, stats) {
       const toolName = exec && exec.name
       const args = (exec && exec.arguments) || {}
 
+      // Read the call's text once and reuse it: a script can be 256 KB, and the deny
+      // path used to read it three times to answer three questions about one string.
+      const shellText = SHELL_TOOL_NAMES.has(toolName) ? shellTextOf(args) : ''
+
       if (config.denyCurlWget !== false) {
-        const reason = floodReason(toolName, args)
+        const reason = floodReason(toolName, args, shellText)
         if (reason) {
           stats.denied += 1
+          // The ledger counts what would have entered the conversation. A script file
+          // never does, so only the command line itself is measured here.
           stats.deniedBytes += typeof args.command === 'string' ? args.command.length : 0
-          stats.calls[floodToolName(args.command || '')] = (stats.calls[floodToolName(args.command || '')] || 0) + 1
+          const denied = floodToolName(shellText)
+          stats.calls[denied] = (stats.calls[denied] || 0) + 1
           return { kind: 'deny', reason }
         }
       }
 
       if (SHELL_TOOL_NAMES.has(toolName) && config.bashNudgeMinCommandBytes > 0) {
-        const command = typeof args.command === 'string' ? args.command : ''
+        const command = shellText
         if (command.length > config.bashNudgeMinCommandBytes) {
           const reason = 'dsh-context-toolkit: this command is about ' + command.length
             + ' bytes (threshold ' + config.bashNudgeMinCommandBytes + '). If you only need a count, a filter '

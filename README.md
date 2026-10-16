@@ -113,10 +113,10 @@ Tool switches: `tools.execute`, `tools.executeFile`, `tools.batchExecute`, `tool
 The offline suites need no DSH runtime:
 
 ```bash
-node smoke.mjs        # 58 checks: contract, runtime discovery, tools, gate, knowledge base, observability, version reporting
+node smoke.mjs        # 66 checks: contract, runtime discovery, tools, gate (segment matching, prefix/path normalisation, script_path coverage), resource disposal, knowledge base, observability, version reporting
 node test-client.mjs  # 27 checks: browser-half contract and bilingual dictionary parity
 node test-package.mjs # 20 checks: publish manifest and the zero-dependency constraint
-node release-check.mjs # 24 checks: release readiness (manifest, deps, tool count, gate, version, SHA coverage, no hardcoded paths)
+node release-check.mjs # 27 checks: release readiness (manifest, deps, tool count, gate matching, version, SHA coverage, no hardcoded paths)
 ```
 
 ## Known limits
@@ -125,6 +125,7 @@ node release-check.mjs # 24 checks: release readiness (manifest, deps, tool coun
 - **`ctk_execute` timeouts are hard kills**: the child is terminated and `timedOut` is reported.
 - **A single run captures at most 256 KB**; anything beyond is counted but not retained. The text handed back is additionally capped at 4000 characters, so even a 1 MB single-line output cannot enter the conversation whole.
 - **The knowledge base deduplicates by path**: filing the same path again replaces the earlier copy.
+- **The gate is precise, not exhaustive.** A flood tool is refused only when it is the command word of some segment — after exec prefixes (`sudo`, `exec`, …) and path/extension normalisation are stripped — and `script_path` is read up to the first 256 KB. A tool a program invokes internally (`python -c 'import wget'`) is outside its remit.
 
 ## License
 

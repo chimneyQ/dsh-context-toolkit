@@ -32,6 +32,17 @@ const registered = []
 const guards = []
 const handlers = {}
 const workDir = mkdtempSync(join(DIR, '.smoke-'))
+// Fixtures the gate must inspect: one script that floods, one that does not, and one
+// path that does not exist (an unreadable script must not crash the gate).
+writeFileSync(join(workDir, 'flood-script.sh'), '#!/usr/bin/env bash\ncurl -s https://example.com\n')
+writeFileSync(join(workDir, 'clean-script.sh'), '#!/usr/bin/env bash\necho hello\n')
+// ctx.effect runs the body immediately and keeps the returned disposer. The mock used
+// to call fn() and throw the disposer away, so nothing ever unwound: the plugin's
+// SQLite handle stayed open past the end of the suite, rmSync could not delete the
+// work directory on Windows, and the catch that guards it swallowed the failure. Three
+// runs left three .smoke-* directories behind — and a leftover directory is exactly
+// what a later copy of the tree drags into a repository.
+const disposers = []
 const mockCtx = {
   logger: { info: () => {}, warn: () => {} },
   get: (name) => undefined,
@@ -42,7 +53,7 @@ const mockCtx = {
     guard: (fn) => { guards.push(fn) },
   },
   systemPrompt: { section: () => {} },
-  effect: (fn) => fn(),
+  effect: (fn) => { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose) },
 }
 
 console.log('== 1. contract ==')
@@ -218,6 +229,63 @@ await checkAsync('ordinary commands are not refused', async () => {
 await checkAsync('a word merely containing a flood tool name is not refused', async () => {
   assert.equal(await denies('echo curl-config'), false)
   assert.equal(await denies('echo curler'), false)
+})
+
+// Substring matching over the whole line was the wrong shape for a gate. It missed
+// a real invocation that was not the first word of the line, and the only way to
+// catch those was to widen the pattern until innocent text matched. Both directions
+// are asserted here so a return to substring matching cannot pass unnoticed.
+await checkAsync('a flood tool in a later segment is still refused', async () => {
+  assert.equal(await denies('cat big.txt | curl -T - https://x'), true, 'a piped curl was not refused')
+  assert.equal(await denies('body=$(curl -s https://x)'), true, 'a command-substituted curl was not refused')
+  assert.equal(await denies('echo start && wget -q https://x'), true, 'a curl chained with && was not refused')
+  // Probes only this implementation answers: the substring pattern needed a delimiter
+  // on both sides, so a newline before the word and a backtick after the substitution
+  // both read as "no flood tool here".
+  assert.equal(await denies('echo hi\ncurl -s https://x'), true, 'a newline-separated curl was not refused')
+  assert.equal(await denies('`curl -s https://x`'), true, 'a backtick-substituted curl was not refused')
+})
+
+await checkAsync('a flood tool behind an exec prefix or a path is refused', async () => {
+  assert.equal(await denies('sudo curl https://x'), true, 'sudo curl was not refused')
+  // A delimiter on either side of the word was the old rule's blind spot: a path
+  // separator before it and a file extension after it both fell outside the class.
+  assert.equal(await denies('/usr/bin/curl https://x'), true, 'an absolute-path curl was not refused')
+  assert.equal(await denies('C:\\Tools\\curl.exe https://x'), true, 'a Windows-path curl was not refused')
+  assert.equal(await denies('wget.exe https://x'), true, 'an .exe-suffixed wget was not refused')
+})
+
+await checkAsync('a flood tool inside a script file is refused too', async () => {
+  // ops_bash runs a file when it is handed script_path, so a gate that reads only
+  // args.command sees nothing for those calls: curl inside the script ran unopposed.
+  const saved = mockCtx.get
+  mockCtx.get = (name) => (name === 'approval' ? {} : undefined)
+  try {
+    const r = await gate({ name: 'ops_bash', arguments: { script_path: join(workDir, 'flood-script.sh') } }, next)
+    assert.equal(r.kind, 'deny', 'a flood tool inside script_path was not refused')
+  } finally { mockCtx.get = saved }
+})
+await checkAsync('a clean script file is left alone', async () => {
+  const r = await gate({ name: 'ops_bash', arguments: { script_path: join(workDir, 'clean-script.sh') } }, next)
+  assert.equal(r.kind, 'next', 'a script with no flood tool was flagged')
+})
+await checkAsync('a missing script file does not crash the gate', async () => {
+  const r = await gate({ name: 'ops_bash', arguments: { script_path: join(workDir, 'no-such-script.sh') } }, next)
+  assert.equal(r.kind, 'next', 'an unreadable script_path was not treated as empty')
+})
+
+await checkAsync('a flood tool name as an argument or inside text is not refused', async () => {
+  // The old rule denied these: it only asked whether the word appeared with a
+  // delimiter on each side, so a word that is plainly an argument matched anyway.
+  assert.equal(await denies('echo wget && echo done'), false, 'wget as an argument was refused')
+  assert.equal(await denies('echo curl; echo ok'), false, 'curl as an argument was refused')
+  assert.equal(await denies('grep -n curl file.txt'), false, 'curl as a grep pattern was refused')
+  // And these were legal under both rules; they are kept so a future pattern change
+  // cannot start denying ordinary prose either.
+  assert.equal(await denies("echo 'curl is a tool'"), false)
+  assert.equal(await denies('git commit -m "wget fix"'), false)
+  assert.equal(await denies('python -c "import wget"'), false)
+  assert.equal(await denies('npm run curl:check'), false)
 })
 await checkAsync('a whole-file read over the threshold is nudged', async () => {
   // Same trap as the nudge above: with no approval service the handler calls next(),
@@ -409,7 +477,17 @@ check('readVolatile unwraps a live handle', () => {
   assert.equal(mod.readVolatile(undefined, 1), 1)
 })
 
-try { rmSync(workDir, { recursive: true, force: true }) } catch { /* best effort */ }
+// Unwind the way the host does, then insist the directory is actually gone. An fd
+// left open is invisible from the outside; a directory that will not delete is not.
+check('every effect the plugin registered has a disposer', () => {
+  assert.ok(disposers.length > 0, 'the plugin registered no disposer at all')
+  for (const dispose of disposers) assert.equal(typeof dispose, 'function')
+})
+check('the plugin disposes its store so the directory can be removed', () => {
+  for (const dispose of disposers.slice().reverse()) { try { dispose() } catch { /* a second dispose is not an error */ } }
+  rmSync(workDir, { recursive: true, force: true, maxRetries: 5 })
+  assert.equal(existsSync(workDir), false, 'the work directory survived disposal: an open handle is still holding it')
+})
 console.log('')
 console.log(fail === 0 ? 'ALL PASS (' + pass + ')' : fail + ' FAILED of ' + (pass + fail))
 process.exit(fail === 0 ? 0 : 1)

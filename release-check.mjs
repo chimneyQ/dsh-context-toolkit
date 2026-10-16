@@ -56,13 +56,22 @@ const registered = [...index.matchAll(/name: '(ctk_[a-z_]+)'/g)].map((m) => m[1]
 const unique = [...new Set(registered)].sort()
 ck('12 the ten ctk tools are registered', unique.length === 10 && unique.every((n) => /^ctk_[a-z_]+$/.test(n)), unique.join(','))
 ck('13 README.zh names every registered tool', unique.every((n) => readmeZh.includes(n)), unique.filter((n) => !readmeZh.includes(n)).join(','))
-ck('14 README lists the same count the suite reports', /58 /.test(readmeZh) && /58 checks/.test(readmeEn))
+ck('14 README lists the same count the suite reports', /66 /.test(readmeZh) && /66 checks/.test(readmeEn))
 ck('15 the two READMEs mirror each other', (readmeZh.match(/^## /gm) ?? []).length === (readmeEn.match(/^## /gm) ?? []).length, 'zh=' + (readmeZh.match(/^## /gm) ?? []).length + ' en=' + (readmeEn.match(/^## /gm) ?? []).length)
 
 // 5. the gate covers every shell the host exposes, not just the shipped names.
 //    A gate that only knows about bash/pwsh is bypassable by calling ops_bash.
 const SHELLS = ['ops_bash', 'bash', 'pwsh', 'shell', 'bash_persistent', 'pwsh_persistent']
 ck('16 the routing gate covers every shell tool name', /SHELL_TOOL_NAMES = new Set\(\[/.test(index) && SHELLS.every((s) => index.includes("'" + s + "'")), SHELLS.filter((s) => !index.includes("'" + s + "'")).join(','))
+// Matching the whole line for a flood tool is the shape this gate must not regress
+// to: it missed `… | curl -s https://x` and denied `echo wget && echo done`, where the
+// word is plainly an argument. Segment splitting is what makes both directions exact.
+ck('16b the gate matches a segment command word, not a substring of the line', /function commandSegments\(/.test(index) && /function leadingWord\(/.test(index) && /function floodNameOf\(/.test(index))
+ck('16c the gate strips exec prefixes and path suffixes', /EXEC_PREFIXES = new Set\(/.test(index) && /exe\|cmd\|bat\|ps1/.test(index))
+// ops_bash runs a *file* when handed script_path, so a gate that reads only
+// args.command sees nothing at all for those calls — the same bypass as the shell
+// name list, one field over.
+ck('16d the gate reads the script a shell call will run', /function shellTextOf\(args\)/.test(index) && /readFileSync\(args\.script_path/.test(index) && /const shellText = SHELL_TOOL_NAMES\.has\(toolName\) \? shellTextOf\(args\)/.test(index))
 ck('17 curl and wget are hard-denied by default', /denyCurlWget: z\.boolean\(\)\.default\(true\)/.test(index) && /FLOOD_TOOLS = new Set\(\['curl', 'wget'/.test(index))
 ck('18 the gate can be turned off but defaults on', /routing: z\.boolean\(\)\.default\(true\)/.test(index))
 
