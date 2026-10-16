@@ -8,7 +8,7 @@
  * covered by assertions rather than assumed.
  */
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -370,6 +370,17 @@ await checkAsync('ctk_doctor runs its own checks and passes here', async () => {
   assert.equal(r.isError, false, r.text)
   assert.ok(/\[OK\]/.test(r.text), r.text.slice(0, 300))
   assert.ok(!/\[FAIL\]/.test(r.text), r.text)
+  // The doctor used to print a version hardcoded in its own source, which drifted
+  // from the manifest (0.1.0 reported while the bundle shipped 0.2.0).
+  const manifest = JSON.parse(readFileSync(join(DIR, 'package.json'), 'utf8'))
+  assert.ok(r.text.includes('版本 Version — ' + manifest.version),
+    'the doctor disagrees with the manifest: ' + r.text.split('\n').filter((l) => l.includes('版本')).join(' | '))
+})
+check('the reported version tracks the manifest, not a placeholder', () => {
+  const manifest = JSON.parse(readFileSync(join(DIR, 'package.json'), 'utf8'))
+  assert.equal(mod.readManifestVersion(), manifest.version)
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/)
+  assert.notEqual(mod.readManifestVersion(), '0.0.0')
 })
 await checkAsync('ctk_doctor cleans up its own probe document', async () => {
   // The doctor files a probe and removes it; verify through the tool surface, not

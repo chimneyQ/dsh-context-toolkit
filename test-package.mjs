@@ -57,6 +57,12 @@ check('4b the manifest lists more than one file', listed.length > 1, String(list
 // The bundle half must register itself under the package name.
 const indexSource = readFileSync(join(dir, exportsMap['.'] || './index.js'), 'utf8')
 check('5a the bundle registers under the package name', indexSource.includes("export const name = '" + pkg.name + "'"), pkg.name)
+// The version the plugin reports must be the version the manifest ships. It was
+// hardcoded once and drifted (the doctor said 0.1.0 while the bundle shipped
+// 0.2.0), which makes the one line meant to identify a build the least
+// trustworthy one.
+check('5e the reported version is read from the manifest, not hardcoded', /export const PLUGIN_VERSION = readManifestVersion\(\)/.test(indexSource) && !/ok\('版本 Version', '\d/.test(indexSource))
+check('5f the manifest version is a plain semver', /^\d+\.\d+\.\d+$/.test(pkg.version), String(pkg.version))
 check('5b it declares the tools service', /export const inject = \[[^\]]*'tools'/.test(indexSource))
 const clientSource = declaresClient ? readFileSync(join(dir, exportsMap['./client']), 'utf8') : ''
 check('5c the client bundle calls __ModuleLoader__.load', clientSource.includes('window.__ModuleLoader__.load('))

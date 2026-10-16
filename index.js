@@ -18,14 +18,35 @@
  * no third-party runtime dependencies.
  */
 import { homedir } from 'node:os'
-import { existsSync, statSync, readdirSync } from 'node:fs'
-import { join, isAbsolute, resolve, basename } from 'node:path'
+import { existsSync, statSync, readdirSync, readFileSync } from 'node:fs'
+import { join, isAbsolute, resolve, basename, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { runProcess, availableRuntimes, probeRuntimes, shellPlan, scratchDir } from './lib/runner.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { openStore } from './lib/store.js'
 
 export const name = 'dsh-context-toolkit'
 export const inject = ['tools', 'systemPrompt']
+
+/**
+ * The version this bundle actually ships, read from its own manifest.
+ *
+ * It used to be hardcoded and drifted: the manifest moved to 0.2.0 while the
+ * doctor still reported 0.1.0, so the one line meant to identify the build was
+ * the one line that could not be trusted. Reading the manifest keeps the two in
+ * step without a release step of its own.
+ */
+export const PLUGIN_VERSION = readManifestVersion()
+
+/** Read the neighbouring package.json; a bundled copy still gets a usable value. */
+export function readManifestVersion() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const parsed = JSON.parse(readFileSync(join(here, 'package.json'), 'utf8'))
+    if (parsed && typeof parsed.version === 'string' && parsed.version) return parsed.version
+  } catch { /* not resolvable from here: still report something the doctor can print */ }
+  return '0.0.0'
+}
 
 const z = await loadSchemastery()
 
@@ -1223,7 +1244,7 @@ function registerObservabilityTools(ctx, config, stats, store, storageDir, log) 
 
         // storage
         ok('存储目录 Storage', storageDir)
-        ok('版本 Version', '0.1.0')
+        ok('版本 Version', PLUGIN_VERSION)
 
         lines.push('')
         const failed = lines.filter((l) => l.startsWith('[FAIL]')).length
