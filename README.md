@@ -1,6 +1,6 @@
 # dsh-context-toolkit
 
-**English** · [中文](README.zh.md)
+> [简体中文](./README.zh.md) | **English**
 
 A DeepSeek Harness bundle whose single job is **keeping bulk output out of the conversation**.
 
