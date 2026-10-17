@@ -8,7 +8,7 @@
  * covered by assertions rather than assumed.
  */
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,6 +36,11 @@ const workDir = mkdtempSync(join(DIR, '.smoke-'))
 // path that does not exist (an unreadable script must not crash the gate).
 writeFileSync(join(workDir, 'flood-script.sh'), '#!/usr/bin/env bash\ncurl -s https://example.com\n')
 writeFileSync(join(workDir, 'clean-script.sh'), '#!/usr/bin/env bash\necho hello\n')
+// A script reached through a *relative* path. The host resolves it against the session
+// working directory, which is not this process's cwd, so the gate has to resolve it the
+// same way or it reads nothing and lets the call through.
+mkdirSync(join(workDir, 'nested'))
+writeFileSync(join(workDir, 'nested', 'flood-rel.sh'), '#!/usr/bin/env bash\ncurl -s https://example.com\n')
 // ctx.effect runs the body immediately and keeps the returned disposer. The mock used
 // to call fn() and throw the disposer away, so nothing ever unwound: the plugin's
 // SQLite handle stayed open past the end of the suite, rmSync could not delete the
@@ -264,6 +269,21 @@ await checkAsync('a flood tool inside a script file is refused too', async () =>
     const r = await gate({ name: 'ops_bash', arguments: { script_path: join(workDir, 'flood-script.sh') } }, next)
     assert.equal(r.kind, 'deny', 'a flood tool inside script_path was not refused')
   } finally { mockCtx.get = saved }
+})
+await checkAsync('a relative script_path is resolved against the session cwd', async () => {
+  // Without this the gate statSync'd the raw relative string against its own cwd (the
+  // install directory), read nothing, and allowed a call the host would happily run.
+  const withSession = (args, cwd) => ({ name: 'ops_bash', arguments: args, agent: { session: { header: { cwd } } } })
+  const r = await gate(withSession({ script_path: 'nested/flood-rel.sh' }, workDir), next)
+  assert.equal(r.kind, 'deny', 'a relative script_path escaped the gate')
+  const underCwd = await gate(withSession({ script_path: 'flood-rel.sh', cwd: 'nested' }, workDir), next)
+  assert.equal(underCwd.kind, 'deny', 'a relative script_path under an explicit cwd escaped the gate')
+})
+await checkAsync('a relative script_path with no session falls back to the process cwd', async () => {
+  // The documented fallback: with no session there is no better base, and reading
+  // nothing stays a non-event rather than an error.
+  const r = await gate({ name: 'ops_bash', arguments: { script_path: 'nested/flood-rel.sh' } }, next)
+  assert.equal(r.kind, 'next', 'a missing script must not crash or deny')
 })
 await checkAsync('a clean script file is left alone', async () => {
   const r = await gate({ name: 'ops_bash', arguments: { script_path: join(workDir, 'clean-script.sh') } }, next)

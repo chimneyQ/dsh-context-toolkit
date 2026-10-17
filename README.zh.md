@@ -113,7 +113,7 @@ await ctk_search({ queries: ['rate limit', 'auth'] });  // 只取相关片段
 离线套件不依赖 DSH 运行时：
 
 ```bash
-node smoke.mjs        # 66 项：契约、运行时探测、三工具、门禁（分段匹配 + 前缀/路径归一 + script_path 覆盖）、资源释放、知识库、观测、版本自述
+node smoke.mjs        # 68 项：契约、运行时探测、三工具、门禁（分段匹配 + 前缀/路径归一 + script_path 覆盖与相对路径对齐）、资源释放、知识库、观测、版本自述
 node test-client.mjs  # 27 项：浏览器半体契约与双语字典一致性
 node test-package.mjs # 20 项：发布清单与零依赖约束
 node release-check.mjs # 27 项：发布就绪（清单/依赖/工具数/门禁匹配/版本/SHA 覆盖/无硬编码路径）

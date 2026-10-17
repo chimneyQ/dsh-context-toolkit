@@ -365,16 +365,41 @@ const SCRIPT_READ_MAX = 256 * 1024
  * the same bypass the shell-name list fixed, one field over: whichever field carries
  * the payload, the gate has to follow it.
  */
-function shellTextOf(args) {
+function shellTextOf(args, exec) {
   const parts = []
   if (typeof args.command === 'string') parts.push(args.command)
   if (typeof args.script_path === 'string' && args.script_path.trim()) {
+    const path = resolveScriptPath(args.script_path, args.cwd, exec)
     try {
-      const st = statSync(args.script_path)
-      if (st.isFile()) parts.push(readFileSync(args.script_path, 'utf8').slice(0, SCRIPT_READ_MAX))
+      const st = statSync(path)
+      if (st.isFile()) parts.push(readFileSync(path, 'utf8').slice(0, SCRIPT_READ_MAX))
     } catch { /* an unreadable script is the shell tool's error to report, not the gate's */ }
   }
   return parts.join('\n')
+}
+
+/**
+ * Where a relative script_path actually points.
+ *
+ * The host resolves a relative script against the *session* working directory, while
+ * statSync resolves it against this process's cwd — the install directory. The two
+ * disagree, so reading the raw string saw nothing for a relative script_path and waved
+ * the call through even though the host would run it happily. Aligning the base closes
+ * the last way a shell call can carry a payload the gate cannot see: whenever the host
+ * can run the file, the gate resolves the same file.
+ */
+function resolveScriptPath(requested, requestedCwd, exec) {
+  if (isAbsolute(requested)) return requested
+  let session = null
+  try {
+    session = exec && exec.agent && exec.agent.session && exec.agent.session.header
+      ? exec.agent.session.header.cwd : null
+  } catch { /* no session on this exec: fall back to the process default */ }
+  const base = session || process.cwd()
+  const cwd = typeof requestedCwd === 'string' && requestedCwd.trim()
+    ? (isAbsolute(requestedCwd) ? requestedCwd : resolve(base, requestedCwd))
+    : base
+  return resolve(cwd, requested)
 }
 
 function floodReason(toolName, args, text) {
@@ -407,7 +432,7 @@ function registerRoutingGate(ctx, config, stats) {
 
       // Read the call's text once and reuse it: a script can be 256 KB, and the deny
       // path used to read it three times to answer three questions about one string.
-      const shellText = SHELL_TOOL_NAMES.has(toolName) ? shellTextOf(args) : ''
+      const shellText = SHELL_TOOL_NAMES.has(toolName) ? shellTextOf(args, exec) : ''
 
       if (config.denyCurlWget !== false) {
         const reason = floodReason(toolName, args, shellText)
@@ -459,7 +484,7 @@ function registerRoutingGate(ctx, config, stats) {
   })
 
   if (config.denyCurlWget !== false && ctx.tools && typeof ctx.tools.guard === 'function') {
-    ctx.tools.guard((exec) => floodReason(exec && exec.name, (exec && exec.arguments) || {}))
+    ctx.tools.guard((exec) => { const a = (exec && exec.arguments) || {}; return floodReason(exec && exec.name, a, shellTextOf(a, exec)) })
   }
 }
 
