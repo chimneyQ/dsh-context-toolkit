@@ -5,7 +5,7 @@
 User-visible changes, newest first. Commit hashes in brackets.
 
 ## 0.3.4
-- **Fixed**: output that a tool already truncated is no longer compressed a second time. An upstream tool (`ops_bash`) truncates its own output and spills the rest to a file, and the sandbox (`ctk_execute`) caps a run at 256 KB and closes with a `~~~` line; this layer used to compress those already-handled bodies again — saving nothing, storing a second copy of the same original, and counting the same traffic twice. Both markers (`[output truncated; full output: …]` and a standalone `~~~` line) are recognised and skipped, and the reason is reported in a new "skip reasons" ledger line. [`TBD`]
+- **Fixed**: output that a tool already truncated is no longer compressed a second time. An upstream tool (`ops_bash`) truncates its own output and spills the rest to a file, and the sandbox (`ctk_execute`) caps a run at 256 KB and closes with a `~~~` line; this layer used to compress those already-handled bodies again — saving nothing, storing a second copy of the same original, and counting the same traffic twice. Both markers (`[output truncated; full output: …]` and a standalone `~~~` line) are recognised and skipped, and the reason is reported in a new "skip reasons" ledger line. [`038447b`]
 
 ## 0.3.3
 - **Docs**: adds this bilingual changelog, listed in the manifest and gated by release-check; the README and repository description were refreshed too. The npm package now carries the changelog with each release. [`01d7107`]
