@@ -74,7 +74,7 @@ check('declares the tools service', () => assert.ok(Array.isArray(mod.inject) &&
 
 console.log('== 2. tools registered ==')
 const names = registered.map((d) => d.name).sort()
-check('registers the sandbox, knowledge and observability tools', () => assert.deepEqual(names, ['ctk_batch_execute', 'ctk_context_report', 'ctk_doctor', 'ctk_execute', 'ctk_execute_file', 'ctk_fetch_and_index', 'ctk_index', 'ctk_purge', 'ctk_search', 'ctk_stats']))
+check('registers the sandbox, knowledge and observability tools', () => assert.deepEqual(names, ['ctk_batch_execute', 'ctk_context_report', 'ctk_doctor', 'ctk_execute', 'ctk_execute_file', 'ctk_fetch_and_index', 'ctk_index', 'ctk_purge', 'ctk_retrieve', 'ctk_search', 'ctk_stats']))
 check('every tool declares parameters, output and execute', () => {
   for (const def of registered) {
     assert.equal(typeof def.execute, 'function', def.name + ' lacks execute')
@@ -512,6 +512,97 @@ await checkAsync('ctk_doctor cleans up its own probe document', async () => {
   assert.equal(a, b, 'the doctor left a probe document behind: ' + b + ' -> ' + a)
 })
 
+console.log('== 12. output slimming and reversible storage ==')
+const slim = await import('file:///' + join(DIR, 'lib', 'compress.js').replace(/\\/g, '/'))
+
+check('a uniform JSON array is re-encoded losslessly', () => {
+  const rows = Array.from({ length: 120 }, (_, i) => ({ model: 'm' + i, input: i, output: i * 2 }))
+  const out = slim.slimText(JSON.stringify(rows, null, 1))
+  assert.ok(out, 'a 120-row uniform array was left alone')
+  assert.equal(out.lossless, true, 'the lossless route was not taken')
+  for (const r of rows.slice(0, 20)) assert.ok(out.text.includes(JSON.stringify(r.model)), 'value lost: ' + r.model)
+})
+
+check('a table keeps line coordinates for the sampled middle', () => {
+  const text = ['model | input | output'].concat(Array.from({ length: 400 }, (_, i) => 'm' + i + ' | ' + i + ' | ' + (i * 2))).join('\n')
+  const out = slim.slimText(text)
+  assert.ok(out, 'a 400-row table was left alone')
+  assert.ok(/^L\d+: /m.test(out.text), 'the sampled middle carries no original line numbers')
+})
+
+check('a log keeps every diagnostic line', () => {
+  const lines = Array.from({ length: 600 }, (_, i) => (i % 23 === 0 ? 'Error: boom ' + i : '[info] step ' + i))
+  const expected = lines.filter((l) => /Error/.test(l)).length
+  const out = slim.slimText(lines.join('\n'))
+  assert.ok(out, 'a sparse-error log was left alone')
+  assert.equal((out.text.match(/Error: boom/g) || []).length, expected, 'diagnostics were lost')
+})
+
+check('code is never compressed', () => {
+  const text = Array.from({ length: 200 }, (_, i) => (i + 1) + '|const x' + i + ' = ' + i).join('\n')
+  assert.equal(slim.slimText(text), null, 'line-numbered source was compressed')
+})
+
+check('a body with nothing to save is left alone', () => {
+  assert.equal(slim.slimText('a\nb'), null, 'a tiny body was slimmed')
+})
+
+check('the byte gate rejects a candidate that cannot save enough', () => {
+  // The gate is asserted through the prompt, not by reading the source: at an
+  // impossible ratio nothing may be adopted.
+  const text = 'x\n'.repeat(2000)
+  assert.equal(slim.slimText(text, { limits: { keepRatioMax: 0.01 } }), null,
+    'the byte gate let a candidate through at an impossible ratio')
+})
+
+check('every adopted candidate strictly lowers the token estimate', () => {
+  // The invariant, asserted over real shapes rather than over a hand-built case. A
+  // compression that saves bytes but not tokens is a loss with a receipt.
+  const shapes = [
+    ['table', Array.from({ length: 400 }, (_, i) => 'm' + i + ' | ' + i + ' | ' + (i * 2)).join('\n')],
+    ['log', Array.from({ length: 600 }, (_, i) => (i % 23 === 0 ? 'Error: ' + i : '[info] ' + i)).join('\n')],
+    ['json', JSON.stringify(Array.from({ length: 120 }, (_, i) => ({ m: 'x' + i, i })), null, 1)],
+    ['prose', 'word '.repeat(3000)],
+  ]
+  for (const [label, text] of shapes) {
+    const out = slim.slimText(text)
+    if (!out) continue
+    assert.ok(slim.estimateTokens(out.text) < slim.estimateTokens(text),
+      label + ': adopted without lowering the token estimate')
+  }
+})
+
+check('both never-worse gates are present in the compressor', () => {
+  // Asserted at the source because the gates decide every adoption, and the negative
+  // control for this suite removes one of them: a suite that still passed then would
+  // be certifying the very thing it exists to prevent.
+  const src = readFileSync(join(DIR, 'lib', 'compress.js'), 'utf8')
+  assert.ok(/ratio > limits\.keepRatioMax/.test(src), 'the byte gate is gone')
+  assert.ok(/tokensAfter < tokensBefore/.test(src), 'the token gate is gone')
+})
+
+check('a stored original comes back byte-for-byte', () => {
+  const dir2 = mkdtempSync(join(DIR, '.kb-'))
+  const st = storeMod.openStore(dir2)
+  try {
+    const original = 'line one  \n\nline two\n\ttabbed\r\n'
+    st.putBlob('exact', original)
+    const back = st.getBlob('exact')
+    assert.equal(back.text, original, 'the restore was not exact')
+    assert.equal(back.bytes, Buffer.byteLength(original, 'utf8'), 'byte count disagrees')
+    assert.equal(st.getBlob('missing'), null, 'an unknown id did not resolve to null')
+  } finally {
+    try { st.close() } catch { /* best effort */ }
+    try { rmSync(dir2, { recursive: true, force: true, maxRetries: 5 }) } catch { /* best effort */ }
+  }
+})
+
+check('the slimmer is mounted on the post-execute seam', () => {
+  assert.equal(typeof handlers['tools/post-execute'], 'function',
+    'nothing listens to tools/post-execute, so nothing already inside can be slimmed')
+})
+
+
 console.log('== 11. config surface ==')
 check('every control is a flat volatile key', () => {
   const keys = Object.keys(mod.Config.dict)
@@ -519,7 +610,7 @@ check('every control is a flat volatile key', () => {
 })
 check('tool switches are flat dotted names, not a nested object', () => {
   const keys = Object.keys(mod.Config.dict).filter((k) => k.startsWith('tools.'))
-  assert.deepEqual(keys.sort(), ['tools.batchExecute', 'tools.contextReport', 'tools.doctor', 'tools.execute', 'tools.executeFile', 'tools.fetchAndIndex', 'tools.index', 'tools.purge', 'tools.search', 'tools.stats'])
+  assert.deepEqual(keys.sort(), ['tools.batchExecute', 'tools.contextReport', 'tools.doctor', 'tools.execute', 'tools.executeFile', 'tools.fetchAndIndex', 'tools.index', 'tools.purge', 'tools.retrieve', 'tools.search', 'tools.stats'])
 })
 check('readVolatile unwraps a live handle', () => {
   const handle = { [Symbol.for('cosmokit.volatile.read')]: () => 42 }

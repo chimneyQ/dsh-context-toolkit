@@ -68,6 +68,8 @@
     "tools.indexHint": "把长文档、日志、规范归档，之后用 ctk_search 按需取用。",
     "tools.search": "ctk_search（按需检索知识库，取片段而非整份）",
     "tools.searchHint": "知识库里已有的内容优先用它检索，不要整份读进来。",
+    "tools.retrieve": "ctk_retrieve（取回瘦身前存的逐字节原文）",
+    "tools.retrieveHint": "收到带有 [ctk_retrieve id=…] 标记的瘦身文本时，说明原文被逐字节存下了；片段不够用就调它取回全文，不要凭精简文本猜。",
     "tools.fetchAndIndex": "ctk_fetch_and_index（抓网页并直接并入索引）",
     "tools.fetchAndIndexHint": "抓整页网页又不让它淹没对话时用；curl/wget 会被门禁拦掉。",
     "tools.purge": "ctk_purge（删除已索引内容，不可恢复）",

@@ -28,6 +28,7 @@ It separates *raw bytes* from *conclusions*: commands run in a child process, fi
 | `ctk_batch_execute` | Several commands in one call, per-command status, conclusions only |
 | `ctk_index` | File text or a file into the local FTS5 knowledge base |
 | `ctk_search` | Multi-query retrieval; excerpts are centred on the match |
+| `ctk_retrieve` | Read back a slimmed output's stored original, byte-for-byte, from its `[ctk_retrieve id=…]` marker |
 | `ctk_fetch_and_index` | Fetch pages → strip markup → file them |
 | `ctk_purge` | Delete filed material (requires `confirm: true`) |
 | `ctk_stats` | Savings ledger: refusals, sandbox bytes, filed bytes, call counts |
@@ -117,8 +118,27 @@ The offline suites need no DSH runtime:
 node smoke.mjs        # 70 checks: contract, runtime discovery, tools, gate (segment matching, prefix/path normalisation, host-aligned path base, script_path and host-fetcher coverage), resource disposal, knowledge base, observability, version reporting
 node test-client.mjs  # 27 checks: browser-half contract and bilingual dictionary parity
 node test-package.mjs # 20 checks: publish manifest and the zero-dependency constraint
-node release-check.mjs # 27 checks: release readiness (manifest, deps, tool count, gate matching, version, SHA coverage, no hardcoded paths)
+node release-check.mjs # 30 checks: release readiness (manifest, deps, tool count, gate matching, version, SHA coverage, no hardcoded paths)
 ```
+
+## Output slimming (after a tool runs)
+
+The gate works at the *door*; slimming handles what is **already inside**. They catch different traffic: the gate can only read a call's *arguments*, while slimming sees the *bytes that actually came back* — from a tool the gate does not know, an entry point it does not cover, or output that was never predictable from the call.
+
+At `tools/post-execute`, the strategy follows the shape:
+
+| Shape | Treatment |
+|---|---|
+| Uniform JSON array | **Lossless** tabular re-encoding: keys written once, no information dropped |
+| Table | Header plus both ends kept; the middle stride-sampled **with original line numbers** (the model gets a map with coordinates) |
+| grep / search | Folded by file, first hits per file kept |
+| Log | Ordinary lines folded away, **diagnostics kept verbatim** |
+| Long prose | Head/tail window with an explicit elision marker |
+| Code / key-value | **Not compressed** (the model may be about to edit exact bytes) |
+
+**Two gates**: a candidate must be at most 72% of the original bytes *and* have a strictly lower token estimate, or it is dropped — no saving means no claim, and the ledger never overstates.
+
+**Reversibility is the red line**: every lossy path stores the exact original first and injects a `[ctk_retrieve id=…]` marker, read back with `ctk_retrieve`. The originals live in the **same database as the FTS5 index** — one file, two jobs: FTS5 finds sections, blobs restore them.
 
 ## Known limits
 

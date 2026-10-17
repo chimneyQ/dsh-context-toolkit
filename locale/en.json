@@ -68,6 +68,8 @@
     "tools.indexHint": "Archive long docs, logs or specs, then pull sections with ctk_search.",
     "tools.search": "ctk_search (retrieve excerpts on demand, not the whole thing)",
     "tools.searchHint": "Prefer this for material already in the knowledge base.",
+    "tools.retrieve": "ctk_retrieve (read back a stored original byte-for-byte)",
+    "tools.retrieveHint": "When slimmed text carries a [ctk_retrieve id=...] marker, the exact original was stored; call this to get it back rather than guessing from the condensed text.",
     "tools.fetchAndIndex": "ctk_fetch_and_index (fetch a page straight into the index)",
     "tools.fetchAndIndexHint": "When a whole page would flood the conversation; curl/wget are gated.",
     "tools.purge": "ctk_purge (delete indexed content — permanent)",

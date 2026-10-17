@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { runProcess, availableRuntimes, probeRuntimes, shellPlan, scratchDir } from './lib/runner.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { openStore } from './lib/store.js'
+import { slimText, DEFAULT_LIMITS as SLIM_DEFAULTS } from './lib/compress.js'
 
 export const name = 'dsh-context-toolkit'
 export const inject = ['tools', 'systemPrompt']
@@ -136,6 +137,11 @@ export const Config = z.object({
   denyCurlWget: z.boolean().default(true).volatile().description('硬拦 curl/wget 这类洪水工具'),
   bashNudgeMinCommandBytes: z.number().min(0).default(4096).volatile().description('长命令软引导阈值（字节）'),
   nudgeFetchTools: z.boolean().default(true).volatile().description('把宿主取网页工具（web_fetch/read_page）也纳入整页软引导'),
+  // The gate stops bulk output at the door; this handles what is already inside.
+  slimOutputs: z.boolean().default(true).volatile().description('工具执行后瘦身：结构感知压缩 + 可逆原文，双重门（≤72% 字节且 token 严格下降）'),
+  slimMinBytes: z.number().min(0).default(1400).volatile().description('普通输出进入瘦身的最小字节（0 = 关闭）'),
+  slimErrorMinBytes: z.number().min(0).default(6000).volatile().description('错误输出的最小字节（留高，调试场景不压）'),
+  slimOriginalTtlMinutes: z.number().min(0).default(1440).volatile().description('可逆原文保留时长（分钟），0 = 永久保留'),
   maxReadBytesBeforeAsk: z.number().min(0).default(51200).volatile().description('大文件整读软引导阈值（字节）'),
   trustedReadBasenames: z.array(z.string())
     .default(['package.json', 'tsconfig.json', 'cordis.patch.yml', 'cordis.yml'])
@@ -149,6 +155,7 @@ export const Config = z.object({
   'tools.batchExecute': z.boolean().default(true).volatile().description('注册 ctk_batch_execute'),
   'tools.index': z.boolean().default(true).volatile().description('注册 ctk_index'),
   'tools.search': z.boolean().default(true).volatile().description('注册 ctk_search'),
+  'tools.retrieve': z.boolean().default(true).volatile().description('注册 ctk_retrieve（读取瘦身前存的原文）'),
   'tools.fetchAndIndex': z.boolean().default(true).volatile().description('注册 ctk_fetch_and_index'),
   'tools.purge': z.boolean().default(true).volatile().description('注册 ctk_purge'),
   'tools.stats': z.boolean().default(true).volatile().description('注册 ctk_stats'),
@@ -200,6 +207,7 @@ export function apply(ctx, rawConfig) {
     'tools.batchExecute': true,
     'tools.index': true,
     'tools.search': true,
+    'tools.retrieve': true,
     'tools.fetchAndIndex': true,
     'tools.purge': true,
     'tools.stats': true,
@@ -209,6 +217,11 @@ export function apply(ctx, rawConfig) {
     searchLimit: 5,
     snippetChars: 900,
     fetchMaxBytes: 2000000,
+    nudgeFetchTools: true,
+    slimOutputs: true,
+    slimMinBytes: SLIM_DEFAULTS.minBytes,
+    slimErrorMinBytes: SLIM_DEFAULTS.errorMinBytes,
+    slimOriginalTtlMinutes: 1440,
   }
   const incoming = rawConfig || {}
   const config = {
@@ -223,6 +236,7 @@ export function apply(ctx, rawConfig) {
     'tools.batchExecute': readVolatile(incoming['tools.batchExecute'], defaults['tools.batchExecute']),
     'tools.index': readVolatile(incoming['tools.index'], defaults['tools.index']),
     'tools.search': readVolatile(incoming['tools.search'], defaults['tools.search']),
+    'tools.retrieve': readVolatile(incoming['tools.retrieve'], defaults['tools.retrieve']),
     'tools.fetchAndIndex': readVolatile(incoming['tools.fetchAndIndex'], defaults['tools.fetchAndIndex']),
     'tools.purge': readVolatile(incoming['tools.purge'], defaults['tools.purge']),
     'tools.stats': readVolatile(incoming['tools.stats'], defaults['tools.stats']),
@@ -232,6 +246,11 @@ export function apply(ctx, rawConfig) {
     searchLimit: readVolatile(incoming.searchLimit, defaults.searchLimit),
     snippetChars: readVolatile(incoming.snippetChars, defaults.snippetChars),
     fetchMaxBytes: readVolatile(incoming.fetchMaxBytes, defaults.fetchMaxBytes),
+    nudgeFetchTools: readVolatile(incoming.nudgeFetchTools, defaults.nudgeFetchTools),
+    slimOutputs: readVolatile(incoming.slimOutputs, defaults.slimOutputs),
+    slimMinBytes: readVolatile(incoming.slimMinBytes, defaults.slimMinBytes),
+    slimErrorMinBytes: readVolatile(incoming.slimErrorMinBytes, defaults.slimErrorMinBytes),
+    slimOriginalTtlMinutes: readVolatile(incoming.slimOriginalTtlMinutes, defaults.slimOriginalTtlMinutes),
   }
 
   const storageDir = (typeof config.storageDir === 'string' && config.storageDir.trim())
@@ -246,6 +265,14 @@ export function apply(ctx, rawConfig) {
     registered: 0,
     bytesIndexed: 0,
     bytesSandboxed: 0,
+    // Output slimming: what the post-execute seam removed before the bytes reached
+    // the model, and what it stored so the removal stays reversible.
+    slimmed: 0,
+    slimmedBytes: 0,
+    slimmedTokens: 0,
+    slimSkipped: 0,
+    slimStrategies: {},
+    blobsStored: 0,
     calls: {},
     startedAt: Date.now(),
   }
@@ -258,6 +285,7 @@ export function apply(ctx, rawConfig) {
   }
 
   registerRoutingGate(ctx, config, stats)
+  registerOutputSlimmer(ctx, config, stats, store, log)
   registerTools(ctx, config, stats, storageDir, log)
   if (store) registerKnowledgeTools(ctx, config, stats, store, log)
   else log.info('knowledge tools skipped (no store)')
@@ -439,6 +467,121 @@ function baseNameOf(p) {
   const s = String(p).replace(/[\\/]+$/, '')
   const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'))
   return i >= 0 ? s.slice(i + 1) : s
+}
+
+/**
+ * Slave the seam that runs after a tool body settles but before its result reaches
+ * the session log and the model's history.
+ *
+ * The gate above stops bulk output at the door; this handles what is already inside.
+ * Both halves exist because they catch different traffic: the gate refuses a call
+ * whose *arguments* say it will flood, while this sees the bytes that actually came
+ * back — from a tool the gate does not know, from an entry point it does not cover,
+ * or from output that was simply never predictable from the call.
+ *
+ * Two rules keep it honest. Anything lossy stores the exact original under an id
+ * before returning slim text, so a restore is byte-for-byte; and the compressor's
+ * never-worse gates decide adoption, so the ledger never claims a saving that did
+ * not happen.
+ */
+function registerOutputSlimmer(ctx, config, stats, store, log) {
+  if (config.slimOutputs === false) return
+  if (!store || typeof ctx.on !== 'function') return
+
+  // Our own tools are exempt. ctk_retrieve exists to hand back a full original, so
+  // slimming its result would return the same elided preview the model just paid a
+  // turn to unfold — an expand loop with no exit.
+  const OWN_TOOLS = new Set(['ctk_retrieve', 'ctk_search', 'ctk_stats', 'ctk_context_report', 'ctk_doctor'])
+  // A file the model is about to edit must arrive exactly. The gate's read branch
+  // nudges an oversized whole-file read, and when it allows one the bytes matter.
+  const EXEMPT = new Set(['read'])
+  // Freshness-sensitive results must not be replayed: a stub saying "identical to
+  // 3s ago" is only useful for stable data.
+  const DEDUPE_TTL_MS = 90000
+
+  ctx.on('tools/post-execute', async function (exec, result, next) {
+    let decision
+    try {
+      decision = await next()
+    } catch (error) {
+      log.warn('post-execute next() failed: ' + String((error && error.message) || error))
+      throw error
+    }
+    try {
+      if (!decision || decision.kind !== 'accept') return decision
+      if (Object.prototype.hasOwnProperty.call(decision, 'value')) return decision
+
+      const name = String((exec && exec.name) || '')
+      if (!name || OWN_TOOLS.has(name) || EXEMPT.has(name)) return decision
+      const args = (exec && exec.arguments) || {}
+      const isError = result && result.isError === true
+      const sourceBlocks = decision.content !== undefined ? decision.content : (result && result.content)
+      if (!Array.isArray(sourceBlocks) || !sourceBlocks.length) return decision
+
+      const limits = {
+        minBytes: Number(config.slimMinBytes) || 0,
+        errorMinBytes: Number(config.slimErrorMinBytes) || 0,
+      }
+      if (limits.minBytes <= 0 && limits.errorMinBytes <= 0) return decision
+
+      let touched = false
+      const rewritten = []
+      for (const block of sourceBlocks) {
+        if (!block || block.type !== 'text' || typeof block.text !== 'string') {
+          rewritten.push(block)
+          continue
+        }
+        const outcome = slimText(block.text, { limits, isError })
+        if (!outcome) { stats.slimSkipped += 1; rewritten.push(block); continue }
+
+        let marker = ''
+        if (!outcome.lossless) {
+          const id = 'ctk-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+          try {
+            store.putBlob(id, block.text)
+          } catch (error) {
+            log.warn('could not store the original for ' + id + ': ' + String((error && error.message) || error))
+            stats.slimSkipped += 1
+            rewritten.push(block)
+            continue
+          }
+          stats.blobsStored += 1
+          marker = '\n\n[ctk_retrieve id=' + id + '] the exact original (' + outcome.originalBytes
+            + ' bytes) is stored verbatim; call ctk_retrieve with this id to read it back byte-for-byte.'
+        } else {
+          marker = '\n\n[lossless: keys written once instead of per row; no information was dropped.]'
+        }
+
+        const slimmed = outcome.text + marker
+        // The never-worse gates already ran inside slimText. The marker is added
+        // afterwards and could in principle push the whole thing back over the line,
+        // so the byte gate is applied once more to the text that will actually land.
+        if (Buffer.byteLength(slimmed, 'utf8') >= outcome.originalBytes) {
+          stats.slimSkipped += 1
+          rewritten.push(block)
+          if (marker) { try { store.purgeBlobs({ all: false }) } catch { /* blob stays, harmless */ } }
+          continue
+        }
+
+        stats.slimmed += 1
+        stats.slimmedBytes += outcome.originalBytes - Buffer.byteLength(slimmed, 'utf8')
+        stats.slimmedTokens += outcome.savedTokens
+        stats.slimStrategies[outcome.strategy] = (stats.slimStrategies[outcome.strategy] || 0) + 1
+        void args
+        touched = true
+        rewritten.push({ ...block, text: slimmed })
+      }
+
+      if (!touched) return decision
+      return { ...decision, content: rewritten }
+    } catch (error) {
+      // A slimmer that breaks a tool call is worse than one that misses a saving.
+      log.warn('output slimming failed for ' + String((exec && exec.name) || '?') + ': ' + String((error && error.message) || error))
+      return decision
+    }
+  })
+
+  void DEDUPE_TTL_MS
 }
 
 function registerRoutingGate(ctx, config, stats) {
@@ -915,6 +1058,42 @@ function registerKnowledgeTools(ctx, config, stats, store, log) {
         }
       },
     }, 'ctk_index'))
+    stats.registered += 1
+  }
+
+  if (toolSwitch(config, 'retrieve')) {
+    ctx.tools.register(textTool({
+      name: 'ctk_retrieve',
+      description: 'Read back a compressed tool output byte-for-byte. When output was slimmed, its exact original was stored under an id and the slim text carries an id marker; pass that id here to get the full original back. Use it when the excerpt you received is not enough to act on — never guess from the slimmed text alone.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id from a [ctk_retrieve id=…] marker.' },
+        },
+        required: ['id'],
+      },
+      render: (_a, v) => [{ type: 'text', text: v && typeof v.text === 'string' ? v.text : 'ctk_retrieve finished' }],
+      async execute(args) {
+        const id = String((args && args.id) || '').trim()
+        if (!id) return { text: 'id is required', isError: true }
+        const found = store.getBlob(id)
+        if (!found) {
+          const totals = store.stats()
+          return {
+            text: 'no stored original for "' + id + '". It may have passed its retention window or belong '
+              + 'to another install. The knowledge base currently holds ' + totals.blobs + ' stored original(s).',
+            isError: true,
+          }
+        }
+        stats.calls['ctk_retrieve'] = (stats.calls['ctk_retrieve'] || 0) + 1
+        return {
+          text: '## ctk_retrieve ' + id + '\n'
+            + '- bytes: ' + found.bytes + ' (exact original, restored verbatim)\n'
+            + '- stored: ' + new Date(found.createdAtMs).toISOString() + '\n\n'
+            + found.text,
+        }
+      },
+    }, 'ctk_retrieve'))
     stats.registered += 1
   }
 
