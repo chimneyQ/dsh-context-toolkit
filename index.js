@@ -1086,11 +1086,16 @@ function registerKnowledgeTools(ctx, config, stats, store, log) {
           }
         }
         stats.calls['ctk_retrieve'] = (stats.calls['ctk_retrieve'] || 0) + 1
+        // isError must be present on every return: the host validates a tool's output
+        // against the declared schema and rejects the call outright when it is missing.
+        // Omitting it here made the whole tool unusable — the marker was injected, the
+        // original was stored, and the read-back failed with "missing required property".
         return {
           text: '## ctk_retrieve ' + id + '\n'
             + '- bytes: ' + found.bytes + ' (exact original, restored verbatim)\n'
             + '- stored: ' + new Date(found.createdAtMs).toISOString() + '\n\n'
             + found.text,
+          isError: false,
         }
       },
     }, 'ctk_retrieve'))
@@ -1411,8 +1416,11 @@ function registerObservabilityTools(ctx, config, stats, store, storageDir, log) 
       description: 'Report this plugin\'s savings ledger and knowledge-base usage. Shows how many calls the routing gate refused, how many bytes the sandbox kept out of the conversation, how many bytes were filed, and the per-tool call counts.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       async execute() {
-        const kb = store ? store.stats() : { documents: 0, chunks: 0, bytes: 0 }
-        const produced = stats.bytesSandboxed + stats.bytesIndexed + stats.deniedBytes
+        const kb = store ? store.stats() : { documents: 0, chunks: 0, bytes: 0, blobs: 0, blobBytes: 0 }
+        // Slimmed bytes are kept out too — they were removed from output before it
+        // reached the model. Leaving them out understated the ledger by exactly the
+        // amount this half of the plugin exists to save.
+        const produced = stats.bytesSandboxed + stats.bytesIndexed + stats.deniedBytes + stats.slimmedBytes
         const keptOut = produced
         const uptimeMs = Date.now() - stats.startedAt
         const lines = [
@@ -1422,12 +1430,14 @@ function registerObservabilityTools(ctx, config, stats, store, storageDir, log) 
           '- 门禁拦截 denied: ' + stats.denied + ' 次（约 ' + stats.deniedBytes + ' 字节未进入上下文）',
           '- 沙箱保留 bytesSandboxed: ' + stats.bytesSandboxed + ' 字节（子进程产出但只回结论的部分）',
           '- 已归档 bytesIndexed: ' + stats.bytesIndexed + ' 字节（存入知识库、未留在对话里）',
+          '- 输出瘦身 slimmed: ' + stats.slimmed + ' 块（' + stats.slimmedBytes + ' 字节 ≈ ' + stats.slimmedTokens + ' tokens 未进入上下文；跳过的块 ' + stats.slimSkipped + '）',
           '- 合计 kept out of context: ' + keptOut + ' 字节 ≈ ' + Math.round(keptOut / 4) + ' tokens（按 4 字节/token 估算）',
           '',
           '### 知识库 / knowledge base',
           '- 文档 documents: ' + kb.documents,
           '- 片段 chunks: ' + kb.chunks,
           '- 原文字节 bytes: ' + kb.bytes,
+          '- 可逆原文 blobs: ' + (kb.blobs || 0) + '（' + (kb.blobBytes || 0) + ' 字节，可用 ctk_retrieve 逐字节取回）',
           '- 位置: ' + storageDir,
           '',
           '### 本插件注册的工具',
@@ -1499,6 +1509,9 @@ function registerObservabilityTools(ctx, config, stats, store, storageDir, log) 
         lines.push('- 门禁拦截 denied: ' + stats.denied + ' 次（' + stats.deniedBytes + ' 字节未进入上下文）')
         lines.push('- 沙箱保留 bytesSandboxed: ' + stats.bytesSandboxed + ' 字节')
         lines.push('- 已归档 bytesIndexed: ' + stats.bytesIndexed + ' 字节')
+        lines.push('- 输出瘦身 slimmed: ' + stats.slimmed + ' 块（' + stats.slimmedBytes + ' 字节 ≈ ' + stats.slimmedTokens + ' tokens 未进入上下文）')
+        lines.push('- 可逆原文 blobsStored: ' + stats.blobsStored + ' 份（可用 ctk_retrieve 逐字节取回）')
+        if (stats.slimmed > 0) lines.push('- 瘦身策略: ' + Object.keys(stats.slimStrategies).map((k) => k + '×' + stats.slimStrategies[k]).join(' · '))
         lines.push('- 已注册 registered: ' + stats.registered)
         return { text: lines.join('\n'), isError: false }
       },

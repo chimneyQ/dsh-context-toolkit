@@ -115,7 +115,7 @@ Tool switches: `tools.execute`, `tools.executeFile`, `tools.batchExecute`, `tool
 The offline suites need no DSH runtime:
 
 ```bash
-node smoke.mjs        # 70 checks: contract, runtime discovery, tools, gate (segment matching, prefix/path normalisation, host-aligned path base, script_path and host-fetcher coverage), resource disposal, knowledge base, observability, version reporting
+node smoke.mjs        # 82 checks: contract, runtime discovery, tools, gate (segment matching, host-aligned path base, script_path and host-fetcher coverage), output slimming and reversible retrieval, resource disposal, knowledge base, observability, version reporting
 node test-client.mjs  # 27 checks: browser-half contract and bilingual dictionary parity
 node test-package.mjs # 20 checks: publish manifest and the zero-dependency constraint
 node release-check.mjs # 30 checks: release readiness (manifest, deps, tool count, gate matching, version, SHA coverage, no hardcoded paths)

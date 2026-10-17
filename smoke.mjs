@@ -597,6 +597,83 @@ check('a stored original comes back byte-for-byte', () => {
   }
 })
 
+
+await checkAsync('every tool return carries isError', async () => {
+  // The host validates a tool's output against its declared schema and REJECTS the call
+  // when a required property is missing. ctk_retrieve shipped without isError on its
+  // success path and was unusable in the live session ("missing required property
+  // value.isError"), while this offline suite passed — calling execute() directly skips
+  // that validation. So the contract is asserted here.
+  //
+  // Two traps found while writing this, both of which made it pass wrongly:
+  //   1. probing ctk_retrieve with an unknown id tests its ERROR branch, which always
+  //      carried isError; the success branch is what broke. A stored blob is used here.
+  //   2. wrapped in the synchronous check(), an async callback returns a promise that
+  //      never throws inside it, so the assertion could not fail at all.
+  const pluginStore = storeMod.openStore(workDir)
+  try { pluginStore.putBlob('iserror-success-probe', 'hello from the success path') } finally {
+    try { pluginStore.close() } catch { /* best effort */ }
+  }
+  const probes = {
+    ctk_execute: { language: 'javascript', code: 'return 1' },
+    ctk_execute_file: { path: join(DIR, 'package.json'), language: 'javascript', code: 'return 1' },
+    ctk_batch_execute: { commands: [{ command: 'echo ok' }] },
+    ctk_index: { text: 'iserror-probe', title: 'probe' },
+    ctk_search: { queries: ['iserror-probe'] },
+    ctk_retrieve: { id: 'iserror-success-probe' },
+    ctk_purge: { path: 'text:no-such-doc', all: false },
+    ctk_stats: {},
+    ctk_context_report: {},
+    ctk_doctor: {},
+  }
+  const missing = []
+  for (const [name, args] of Object.entries(probes)) {
+    const def = registered.find((d) => d.name === name)
+    if (!def) continue
+    let out
+    try { out = await def.execute(args, {}) } catch (error) { continue /* a throw is the tool's own error to raise */ }
+    if (!out || typeof out !== 'object') { missing.push(name + ' (not an object)'); continue }
+    if (!Object.prototype.hasOwnProperty.call(out, 'isError')) missing.push(name)
+    // A probe that silently fell into an error branch would test the wrong path.
+    if (name === 'ctk_retrieve' && !String(out.text || '').includes('hello from the success path')) {
+      missing.push('ctk_retrieve (probe did not reach the success path)')
+    }
+  }
+  assert.equal(missing.length, 0, 'these returns omit isError, which the host requires: ' + missing.join(','))
+})
+
+await checkAsync('the mounted slimmer actually slims a result and stores the original', async () => {
+  // Mounted is not the same as working. The suite asserted the listener existed and
+  // never drove it, so a slimmer that returned every decision untouched would have
+  // passed. This drives the real handler with a realistic decision and checks the
+  // three things that matter: the text got shorter, a marker was injected, and the
+  // original is retrievable byte-for-byte.
+  //
+  // The read-back goes through the PLUGIN's store (workDir is what apply() was given),
+  // not a fresh one: the marker id was written by the handler into its own database.
+  const handler = handlers['tools/post-execute']
+  assert.equal(typeof handler, 'function', 'no post-execute listener to drive')
+  const pluginStore = storeMod.openStore(workDir)
+  const before = pluginStore.stats().blobs
+  try {
+    const original = Array.from({ length: 3000 }, (_, i) => String(i + 1)).join('\n')
+    const decision = { kind: 'accept', content: [{ type: 'text', text: original }] }
+    const next = async () => decision
+    const out = await handler({ name: 'ops_bash', arguments: { command: 'seq 1 3000' }, agent: {} }, { isError: false, content: [] }, next)
+    assert.equal(out.kind, 'accept', 'the decision was not accepted through')
+    const delivered = out.content[0].text
+    assert.ok(delivered.length < original.length, 'the slimmer returned the original text unchanged')
+    const m = delivered.match(/\[ctk_retrieve id=([^\]]+)\]/)
+    assert.ok(m, 'no retrieve marker was injected')
+    const back = pluginStore.getBlob(m[1])
+    assert.ok(back, 'the original was not stored for the marker that was injected')
+    assert.equal(back.text, original, 'the stored original is not byte-for-byte')
+    assert.ok(pluginStore.stats().blobs > before, 'the blob count did not move')
+  } finally {
+    try { pluginStore.close() } catch { /* best effort */ }
+  }
+})
+
 check('the slimmer is mounted on the post-execute seam', () => {
   assert.equal(typeof handlers['tools/post-execute'], 'function',
     'nothing listens to tools/post-execute, so nothing already inside can be slimmed')

@@ -59,7 +59,7 @@ const unique = [...new Set(registered)].sort()
 // ctk tool and that the README lists all of them.
 ck('12 the ctk tools are registered', unique.length === 11 && unique.every((n) => /^ctk_[a-z_]+$/.test(n)), unique.join(','))
 ck('13 README.zh names every registered tool', unique.every((n) => readmeZh.includes(n)), unique.filter((n) => !readmeZh.includes(n)).join(','))
-ck('14 README lists the same count the suite reports', /70 /.test(readmeZh) && /70 checks/.test(readmeEn))
+ck('14 README lists the same count the suite reports', /82 /.test(readmeZh) && /82 checks/.test(readmeEn))
 ck('15 the two READMEs mirror each other', (readmeZh.match(/^## /gm) ?? []).length === (readmeEn.match(/^## /gm) ?? []).length, 'zh=' + (readmeZh.match(/^## /gm) ?? []).length + ' en=' + (readmeEn.match(/^## /gm) ?? []).length)
 
 // 5. the gate covers every shell the host exposes, not just the shipped names.
