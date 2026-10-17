@@ -115,7 +115,7 @@ Tool switches: `tools.execute`, `tools.executeFile`, `tools.batchExecute`, `tool
 The offline suites need no DSH runtime:
 
 ```bash
-node smoke.mjs        # 82 checks: contract, runtime discovery, tools, gate (segment matching, host-aligned path base, script_path and host-fetcher coverage), output slimming and reversible retrieval, resource disposal, knowledge base, observability, version reporting
+node smoke.mjs        # 85 checks: contract, runtime discovery, tools, gate (segment matching, host-aligned path base, script_path and host-fetcher coverage), output slimming with reversible retrieval and retention, resource disposal, knowledge base, observability, version reporting
 node test-client.mjs  # 27 checks: browser-half contract and bilingual dictionary parity
 node test-package.mjs # 20 checks: publish manifest and the zero-dependency constraint
 node release-check.mjs # 30 checks: release readiness (manifest, deps, tool count, gate matching, version, SHA coverage, no hardcoded paths)
@@ -139,6 +139,7 @@ At `tools/post-execute`, the strategy follows the shape:
 **Two gates**: a candidate must be at most 72% of the original bytes *and* have a strictly lower token estimate, or it is dropped — no saving means no claim, and the ledger never overstates.
 
 **Reversibility is the red line**: every lossy path stores the exact original first and injects a `[ctk_retrieve id=…]` marker, read back with `ctk_retrieve`. The originals live in the **same database as the FTS5 index** — one file, two jobs: FTS5 finds sections, blobs restore them.
+- **Retention**: `slimOriginalTtlMinutes` (default 1440 = one day, 0 = forever) is swept once on every load; when a marker cannot be delivered the blob is rolled back by id, so an unrelated original is never taken with it.
 
 ## Known limits
 

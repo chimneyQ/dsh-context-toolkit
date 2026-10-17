@@ -284,6 +284,19 @@ export function apply(ctx, rawConfig) {
     log.warn('knowledge base unavailable: ' + String((error && error.message) || error))
   }
 
+  // Retention is enforced here, once per load, because the alternative was a setting
+  // the user could see and the code never read: slimOriginalTtlMinutes was exposed in
+  // the settings page while nothing consumed it, so stored originals accumulated
+  // forever and the promise the panel made was not kept.
+  if (store) {
+    try {
+      const swept = store.purgeBlobsOlderThan(Number(config.slimOriginalTtlMinutes))
+      if (swept.removed > 0) log.info('retention sweep removed ' + swept.removed + ' stored original(s)')
+    } catch (error) {
+      log.warn('retention sweep failed: ' + String((error && error.message) || error))
+    }
+  }
+
   registerRoutingGate(ctx, config, stats)
   registerOutputSlimmer(ctx, config, stats, store, log)
   registerTools(ctx, config, stats, storageDir, log)
@@ -559,7 +572,10 @@ function registerOutputSlimmer(ctx, config, stats, store, log) {
         if (Buffer.byteLength(slimmed, 'utf8') >= outcome.originalBytes) {
           stats.slimSkipped += 1
           rewritten.push(block)
-          if (marker) { try { store.purgeBlobs({ all: false }) } catch { /* blob stays, harmless */ } }
+          // The blob was written but the marker could not be delivered, so nothing will
+          // ever reference it. Removing this specific id is the point: the previous call
+          // passed { all: false } with no age, which purgeBlobs treats as "nothing to do".
+          if (marker) { try { store.purgeBlobs({ ids: [id] }) } catch { /* blob stays, harmless */ } }
           continue
         }
 
@@ -1438,6 +1454,7 @@ function registerObservabilityTools(ctx, config, stats, store, storageDir, log) 
           '- 片段 chunks: ' + kb.chunks,
           '- 原文字节 bytes: ' + kb.bytes,
           '- 可逆原文 blobs: ' + (kb.blobs || 0) + '（' + (kb.blobBytes || 0) + ' 字节，可用 ctk_retrieve 逐字节取回）',
+          '- 原文保留期 retention: ' + (Number(config.slimOriginalTtlMinutes) > 0 ? Number(config.slimOriginalTtlMinutes) + ' 分钟（每次加载时清理过期项）' : '永久保留'),
           '- 位置: ' + storageDir,
           '',
           '### 本插件注册的工具',

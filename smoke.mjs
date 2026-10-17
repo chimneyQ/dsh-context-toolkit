@@ -581,6 +581,52 @@ check('both never-worse gates are present in the compressor', () => {
   assert.ok(/tokensAfter < tokensBefore/.test(src), 'the token gate is gone')
 })
 
+check('retention is honoured: an expired original is dropped, a fresh one is not', () => {
+  const dir3 = mkdtempSync(join(DIR, '.ttl-'))
+  const st = storeMod.openStore(dir3)
+  try {
+    st.putBlob('fresh', 'kept')
+    // Backdate one row so the sweep has something to find; the schema stores the
+    // creation time, which is what a retention policy keys on.
+    st._db.prepare('UPDATE blobs SET created_at_ms = ? WHERE blob_id = ?').run(Date.now() - 10 * 60000, 'fresh')
+    st.putBlob('newer', 'also kept')
+    assert.equal(st.purgeBlobsOlderThan(0).removed, 0, 'a retention of 0 must mean keep forever')
+    assert.equal(st.stats().blobs, 2, 'a retention of 0 removed something')
+    assert.equal(st.purgeBlobsOlderThan(5).removed, 1, 'an original older than the retention survived the sweep')
+    assert.equal(st.stats().blobs, 1, 'the sweep removed the wrong number')
+    assert.equal(st.getBlob('fresh'), null, 'the expired original is still retrievable')
+    assert.ok(st.getBlob('newer'), 'the sweep took a fresh original with it')
+  } finally {
+    try { st.close() } catch { /* best effort */ }
+    try { rmSync(dir3, { recursive: true, force: true, maxRetries: 5 }) } catch { /* best effort */ }
+  }
+})
+
+check('the retention setting is actually consumed, not just displayed', () => {
+  // A knob the page renders and the code never reads is worse than no knob: the panel
+  // promises an expiry that does not happen. This asserts the wiring end to end.
+  const source = readFileSync(join(DIR, 'index.js'), 'utf8')
+  assert.ok(/purgeBlobsOlderThan\(Number\(config\.slimOriginalTtlMinutes\)\)/.test(source),
+    'nothing consumes slimOriginalTtlMinutes, so stored originals never expire')
+})
+
+check('a blob whose marker could not be delivered is removed by id', () => {
+  const dir4 = mkdtempSync(join(DIR, '.ttl2-'))
+  const st = storeMod.openStore(dir4)
+  try {
+    st.putBlob('a', 'one')
+    st.putBlob('b', 'two')
+    assert.equal(st.purgeBlobs({ ids: ['a'] }).removed, 1, 'removing one id did not report a removal')
+    assert.equal(st.getBlob('a'), null, 'the named original survived')
+    assert.ok(st.getBlob('b'), 'removing one id took an unrelated original with it')
+    // The rollback path used to pass { all: false } with no age, which is a no-op.
+    assert.equal(st.purgeBlobs({ all: false }).removed, 0, 'a mode-less purge removed something')
+  } finally {
+    try { st.close() } catch { /* best effort */ }
+    try { rmSync(dir4, { recursive: true, force: true, maxRetries: 5 }) } catch { /* best effort */ }
+  }
+})
+
 check('a stored original comes back byte-for-byte', () => {
   const dir2 = mkdtempSync(join(DIR, '.kb-'))
   const st = storeMod.openStore(dir2)
