@@ -1,6 +1,6 @@
 # 上下文工具箱（dsh-context-toolkit）
 
-> **简体中文** | [English](./README.md)
+> **简体中文** | [English](./README.md) | [更新说明](./CHANGELOG.zh.md)
 
 一个给 DeepSeek Harness 用的插件：**让大块输出不进对话**。
 

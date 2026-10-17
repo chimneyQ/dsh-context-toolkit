@@ -1,6 +1,6 @@
 # dsh-context-toolkit
 
-> [简体中文](./README.zh.md) | **English**
+> [简体中文](./README.zh.md) | **English** | [Changelog](./CHANGELOG.md)
 
 A DeepSeek Harness bundle whose single job is **keeping bulk output out of the conversation**.
 

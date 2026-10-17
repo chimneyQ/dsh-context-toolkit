@@ -23,6 +23,8 @@ const store = read('lib/store.js')
 const runner = read('lib/runner.js')
 const readmeEn = read('README.md')
 const readmeZh = read('README.zh.md')
+const changeEn = read('CHANGELOG.md')
+const changeZh = read('CHANGELOG.zh.md')
 const results = []
 const ck = (label, cond, extra = '') => results.push([cond ? 'PASS' : 'FAIL', label, extra])
 
@@ -60,6 +62,17 @@ const unique = [...new Set(registered)].sort()
 ck('12 the ctk tools are registered', unique.length === 11 && unique.every((n) => /^ctk_[a-z_]+$/.test(n)), unique.join(','))
 ck('13 README.zh names every registered tool', unique.every((n) => readmeZh.includes(n)), unique.filter((n) => !readmeZh.includes(n)).join(','))
 ck('14 README lists the same count the suite reports', /85 /.test(readmeZh) && /85 checks/.test(readmeEn))
+// The changelog is the document a user reads to learn what changed, so it must exist
+// in both languages with the same version coverage — a Chinese changelog that lags the
+// English one is the same defect as a shrunk README.
+ck('15a a changelog exists in both languages', changeEn.length > 500 && changeZh.length > 300, 'en=' + changeEn.length + ' zh=' + changeZh.length)
+const versionsEn = (changeEn.match(/^## /gm) ?? []).length
+const versionsZh = (changeZh.match(/^## /gm) ?? []).length
+ck('15b the changelogs cover the same versions', versionsEn === versionsZh && versionsEn >= 5, 'en=' + versionsEn + ' zh=' + versionsZh)
+ck('15c the changelog is linked from both READMEs', readmeEn.includes('CHANGELOG.md') && readmeZh.includes('CHANGELOG.zh.md'))
+ck('15d the newest changelog section is the shipped version',
+  new RegExp('^## ' + manifest.version.replace(/\./g, '\\.') + '$', 'm').test(changeEn) && new RegExp('^## ' + manifest.version.replace(/\./g, '\\.') + '$', 'm').test(changeZh),
+  'version=' + manifest.version)
 ck('15 the two READMEs mirror each other', (readmeZh.match(/^## /gm) ?? []).length === (readmeEn.match(/^## /gm) ?? []).length, 'zh=' + (readmeZh.match(/^## /gm) ?? []).length + ' en=' + (readmeEn.match(/^## /gm) ?? []).length)
 
 // 5. the gate covers every shell the host exposes, not just the shipped names.
