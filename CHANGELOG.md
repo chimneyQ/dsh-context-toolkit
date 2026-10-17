@@ -4,6 +4,9 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
+## 0.3.3
+- **Docs**: adds this bilingual changelog, listed in the manifest and gated by release-check; the README and repository description were refreshed too. The npm package now carries the changelog with each release. [`01d7107`]
+
 ## 0.3.2
 - **Fixed**: `slimOriginalTtlMinutes` was displayed in the settings page and never read by the code, so the expiry the panel promised never happened and stored originals accumulated without limit; the sweep now runs once on every load.
 - **Fixed**: the rollback call `purgeBlobs({ all: false })` passed no age and was therefore a no-op, leaving the original forever; a rollback now removes exactly the id it wrote and cannot take an unrelated original with it.
