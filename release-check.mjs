@@ -56,7 +56,7 @@ const registered = [...index.matchAll(/name: '(ctk_[a-z_]+)'/g)].map((m) => m[1]
 const unique = [...new Set(registered)].sort()
 ck('12 the ten ctk tools are registered', unique.length === 10 && unique.every((n) => /^ctk_[a-z_]+$/.test(n)), unique.join(','))
 ck('13 README.zh names every registered tool', unique.every((n) => readmeZh.includes(n)), unique.filter((n) => !readmeZh.includes(n)).join(','))
-ck('14 README lists the same count the suite reports', /68 /.test(readmeZh) && /68 checks/.test(readmeEn))
+ck('14 README lists the same count the suite reports', /70 /.test(readmeZh) && /70 checks/.test(readmeEn))
 ck('15 the two READMEs mirror each other', (readmeZh.match(/^## /gm) ?? []).length === (readmeEn.match(/^## /gm) ?? []).length, 'zh=' + (readmeZh.match(/^## /gm) ?? []).length + ' en=' + (readmeEn.match(/^## /gm) ?? []).length)
 
 // 5. the gate covers every shell the host exposes, not just the shipped names.
@@ -76,6 +76,12 @@ ck('16d the gate reads the script a shell call will run', /function shellTextOf\
 // statSync resolves it against this process's cwd, so reading the raw string saw
 // nothing for a relative path and let a runnable call through.
 ck('16e the gate resolves a relative script against the session cwd', /function resolveScriptPath\(requested, requestedCwd, exec\)/.test(index) && /session\.header\.cwd/.test(index) && /resolve\(cwd, requested\)/.test(index))
+// The same payload arrives through the host's own fetcher, which the shell branch
+// never sees: a gate that only watches curl is a gate that watches one door.
+ck('16f the host fetchers are nudged too', /FETCH_TOOLS = new Set\(\['web_fetch', 'read_page'\]\)/.test(index) && /FETCH_TOOLS\.has\(toolName\)/.test(index) && /config\.nudgeFetchTools !== false/.test(index))
+// Both path-reading branches must resolve against the base the host uses, or a
+// relative path is a standing bypass: the host runs the file, the gate reads nothing.
+ck('16g both path branches resolve like the host', /resolveScriptPath\(args\.script_path, args\.cwd, exec\)/.test(index) && /resolveScriptPath\(raw, args\.cwd, exec\)/.test(index))
 ck('17 curl and wget are hard-denied by default', /denyCurlWget: z\.boolean\(\)\.default\(true\)/.test(index) && /FLOOD_TOOLS = new Set\(\['curl', 'wget'/.test(index))
 ck('18 the gate can be turned off but defaults on', /routing: z\.boolean\(\)\.default\(true\)/.test(index))
 

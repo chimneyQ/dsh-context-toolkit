@@ -307,6 +307,36 @@ await checkAsync('a flood tool name as an argument or inside text is not refused
   assert.equal(await denies('python -c "import wget"'), false)
   assert.equal(await denies('npm run curl:check'), false)
 })
+await checkAsync('a whole-file read is nudged even through a relative path', async () => {
+  // The absolute-path probe below used to be the only one, and it passed while the
+  // relative form was statSync'd against the install directory: a 70 KB file went into
+  // the transcript whole. Both bases are asserted now.
+  const saved = mockCtx.get
+  mockCtx.get = (name) => (name === 'approval' ? {} : undefined)
+  try {
+    const rel = await gate({ name: 'read', arguments: { file_path: 'big.txt' }, agent: { session: { header: { cwd: workDir } } } }, next)
+    assert.equal(rel.kind, 'ask', 'a relative oversized read was not flagged')
+    assert.ok(/bytes/.test(String(rel.reason)), 'the refusal omits the size')
+    const noCwd = await gate({ name: 'read', arguments: { file_path: join(workDir, 'big.txt') }, agent: { session: { header: {} } } }, next)
+    assert.equal(noCwd.kind, 'ask', 'an absolute path stopped working when the session carried no cwd')
+  } finally { mockCtx.get = saved }
+})
+
+await checkAsync('the host fetchers are nudged like a shell curl', async () => {
+  // Watching the shell door while the host's own fetcher stood open: web_fetch pulled
+  // the same page into the transcript and the gate never looked at it. curl outside
+  // was refused; the identical payload through web_fetch walked straight in.
+  const saved = mockCtx.get
+  mockCtx.get = (name) => (name === 'approval' ? {} : undefined)
+  try {
+    for (const tool of ['web_fetch', 'read_page']) {
+      const r = await gate({ name: tool, arguments: { url: 'https://example.com' } }, next)
+      assert.equal(r.kind, 'ask', tool + ' escaped the whole-page nudge')
+      assert.ok(/whole page/.test(String(r.reason)), tool + ': the nudge reason omits the page')
+    }
+  } finally { mockCtx.get = saved }
+})
+
 await checkAsync('a whole-file read over the threshold is nudged', async () => {
   // Same trap as the nudge above: with no approval service the handler calls next(),
   // so passing a next() that returns 'ask' made this pass whether or not it fired.

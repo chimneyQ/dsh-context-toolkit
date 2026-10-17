@@ -98,6 +98,7 @@ await ctk_search({ queries: ['rate limit', 'auth'] });  // 只取相关片段
 | `denyCurlWget` | `true` | 硬拦 curl / wget |
 | `bashNudgeMinCommandBytes` | `4096` | 超长命令的引导阈值（0 = 关闭） |
 | `maxReadBytesBeforeAsk` | `51200` | 大文件整读的引导阈值（0 = 关闭） |
+| `nudgeFetchTools` | `true` | 把宿主取网页工具（`web_fetch` / `read_page`）也纳入整页引导 |
 | `trustedReadBasenames` | `package.json` 等 | 不受整读门禁限制的文件名 |
 | `compressNudgeTokens` | `120000` | 占用提示阈值（tokens） |
 | `searchLimit` | `5` | `ctk_search` 每次查询的片段数上限 |
@@ -113,7 +114,7 @@ await ctk_search({ queries: ['rate limit', 'auth'] });  // 只取相关片段
 离线套件不依赖 DSH 运行时：
 
 ```bash
-node smoke.mjs        # 68 项：契约、运行时探测、三工具、门禁（分段匹配 + 前缀/路径归一 + script_path 覆盖与相对路径对齐）、资源释放、知识库、观测、版本自述
+node smoke.mjs        # 70 项：契约、运行时探测、三工具、门禁（分段匹配 + 前缀/路径归一 + 路径基准对齐 + script_path 与取网页工具覆盖）、资源释放、知识库、观测、版本自述
 node test-client.mjs  # 27 项：浏览器半体契约与双语字典一致性
 node test-package.mjs # 20 项：发布清单与零依赖约束
 node release-check.mjs # 27 项：发布就绪（清单/依赖/工具数/门禁匹配/版本/SHA 覆盖/无硬编码路径）
@@ -126,6 +127,7 @@ node release-check.mjs # 27 项：发布就绪（清单/依赖/工具数/门禁�
 - **单次捕获上限 256 KB**，超出部分只计数不保留；回给对话的文本另有 4000 字符硬帽，因此 1 MB 的单行输出也不会整段进入上下文。
 - **知识库按路径去重**：同一路径再次归档是替换，不是追加。
 - **门禁精确而非穷尽**：只有当洪水工具是某个分段的「命令词」时才拒绝（会先剥掉 `sudo`/`exec` 等前缀、归一化路径与 `.exe` 等扩展名），`script_path` 最多读取前 256 KB。程序内部发起的调用（如 `python -c 'import wget'`）不在其职责内。
+- **路径基准与宿主一致**：门禁读取 `script_path` 与 `read` 的 `file_path` 时，按**会话工作目录**解析相对路径（与宿主实际打开文件的基准相同）；否则「宿主能跑、门禁看不见」就是一条现成的绕过路径。
 
 ## 许可
 

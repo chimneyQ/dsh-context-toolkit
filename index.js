@@ -135,6 +135,7 @@ export const Config = z.object({
   routing: z.boolean().default(true).volatile().description('是否启用 tools/pre-execute 路由门禁'),
   denyCurlWget: z.boolean().default(true).volatile().description('硬拦 curl/wget 这类洪水工具'),
   bashNudgeMinCommandBytes: z.number().min(0).default(4096).volatile().description('长命令软引导阈值（字节）'),
+  nudgeFetchTools: z.boolean().default(true).volatile().description('把宿主取网页工具（web_fetch/read_page）也纳入整页软引导'),
   maxReadBytesBeforeAsk: z.number().min(0).default(51200).volatile().description('大文件整读软引导阈值（字节）'),
   trustedReadBasenames: z.array(z.string())
     .default(['package.json', 'tsconfig.json', 'cordis.patch.yml', 'cordis.yml'])
@@ -284,6 +285,17 @@ export function apply(ctx, rawConfig) {
 const FLOOD_TOOLS = new Set(['curl', 'wget', 'httpie', 'http', 'aria2c'])
 
 /**
+ * Host tools whose entire output is a page's bytes.
+ *
+ * Refusing curl inside a shell while leaving the host's own fetcher untouched is a
+ * gate that watches one door of a two-door room: web_fetch pulls the same page into
+ * the transcript, and the plugin's stated job is keeping bulk output out of it. These
+ * are nudged, not denied — the fetch is often exactly what the caller wants, and
+ * ctk_fetch_and_index does the same job while filing the result for later.
+ */
+const FETCH_TOOLS = new Set(['web_fetch', 'read_page'])
+
+/**
  * Every tool name that runs a shell command, so the gate can read its `command`.
  *
  * This list is the gate's blind spot if it drifts: a host name that is absent here
@@ -379,14 +391,21 @@ function shellTextOf(args, exec) {
 }
 
 /**
- * Where a relative script_path actually points.
+ * Resolve a user-named path against the base the host will use to open it.
  *
- * The host resolves a relative script against the *session* working directory, while
- * statSync resolves it against this process's cwd — the install directory. The two
- * disagree, so reading the raw string saw nothing for a relative script_path and waved
- * the call through even though the host would run it happily. Aligning the base closes
- * the last way a shell call can carry a payload the gate cannot see: whenever the host
- * can run the file, the gate resolves the same file.
+ * Both branches that read a path the caller named — a script to run, a file to read —
+ * go through here, because getting the base wrong is invisible until it is a bypass:
+ * statSync resolves a relative path against this process's cwd (the install directory)
+ * while the host resolves it against the *session* working directory. The read failed,
+ * the catch swallowed it, and the call was waved through although the host would act on
+ * the file. Fixed for script_path, then found again unchanged in the read branch.
+ *
+ * Every branch that reads a path the caller named — a script, a file to read — must
+ * use this. The gate originally statSync'd the raw string, which resolves against this
+ * process's cwd (the install directory) while the host resolves against the session
+ * working directory; the read failed, the catch swallowed it, and the call was waved
+ * through although the host would act on the file. That mistake was fixed for
+ * script_path and then found again, unchanged, in the read branch.
  */
 function resolveScriptPath(requested, requestedCwd, exec) {
   if (isAbsolute(requested)) return requested
@@ -459,11 +478,30 @@ function registerRoutingGate(ctx, config, stats) {
         }
       }
 
+      // The host's own fetchers: same payload as a shell curl, one field over.
+      if (FETCH_TOOLS.has(toolName) && config.nudgeFetchTools !== false) {
+        const url = typeof args.url === 'string' ? args.url : ''
+        if (url) {
+          stats.denied += 1
+          stats.deniedBytes += url.length
+          const reason = 'dsh-context-toolkit: ' + toolName + ' returns a whole page. '
+            + 'Use ctk_fetch_and_index(url, source) and then ctk_search(queries) so the bytes are '
+            + 'filed and only the matching sections come back. Fetch it whole only when the page '
+            + 'is genuinely small or you must have every byte.'
+          if (hasService(ctx, 'approval')) return { kind: 'ask', reason }
+          return next()
+        }
+      }
+
       if (toolName === 'read' && config.maxReadBytesBeforeAsk > 0) {
-        const p = typeof args.file_path === 'string' ? args.file_path
+        const raw = typeof args.file_path === 'string' ? args.file_path
           : (typeof args.path === 'string' ? args.path : '')
+        // Resolve the way the host will: a relative path is session-relative, not
+        // install-directory-relative. Reading the raw string made this branch blind to
+        // every relative path, which is how a 70 KB file entered the transcript whole.
+        const p = raw ? resolveScriptPath(raw, args.cwd, exec) : ''
         const bounded = args.offset !== undefined || args.limit !== undefined
-        if (p && !bounded && !(config.trustedReadBasenames || []).includes(baseNameOf(p))) {
+        if (p && !bounded && !(config.trustedReadBasenames || []).includes(baseNameOf(raw || p))) {
           try {
             const st = statSync(p)
             if (st.isFile() && st.size > config.maxReadBytesBeforeAsk) {
