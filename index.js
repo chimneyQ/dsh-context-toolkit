@@ -358,7 +358,23 @@ const SHELL_TOOL_NAMES = new Set(['bash', 'pwsh', 'shell', 'ops_bash', 'bash_per
  * The list stays short on purpose: anything longer turns into a shell parser, and a
  * parser that gets it wrong either blocks an innocent call or waves a real one past.
  */
-const EXEC_PREFIXES = new Set(['!', 'sudo', 'command', 'exec', 'nohup', 'time', 'env', 'busybox'])
+const EXEC_PREFIXES = new Set([
+  '!', 'sudo', 'command', 'exec', 'nohup', 'time', 'env', 'busybox',
+  // Wrappers that take their own options before the real command word. Without
+  // these, "timeout 30 curl …" and "nice -n 5 curl …" read as a command called
+  // "timeout"/"nice" and sailed through.
+  'nice', 'ionice', 'timeout', 'stdbuf', 'setsid', 'chrt', 'taskset', 'xvfb-run',
+])
+
+/**
+ * A shell assignment prefix: `FOO=1`, `PATH=/x`, `LC_ALL=C`.
+ *
+ * `FOO=1 curl …` is an ordinary way to run curl and the assignment is not a command
+ * word at all, so the gate used to read "FOO=1" as the command and wave the call
+ * through. Only the leading run of assignments is skipped; a bare `=` later in the
+ * line is an argument and must not be treated as one.
+ */
+const ASSIGNMENT_PREFIX = /^[A-Za-z_][A-Za-z0-9_]*=/
 
 /**
  * Split a command line at every operator that starts a new command.
@@ -380,8 +396,17 @@ function commandSegments(command) {
 function leadingWord(segment) {
   const tokens = segment.split(/\s+/).filter(Boolean)
   let i = 0
-  while (i < tokens.length && i < 2 && EXEC_PREFIXES.has(tokens[i].toLowerCase().replace(/^!+/, ''))) i += 1
-  return (tokens[i] || '').replace(/^[\"']+|[\"']+$/g, '')
+  // Peel assignment prefixes first: FOO=1 sudo curl has both, in that order.
+  while (i < tokens.length && ASSIGNMENT_PREFIX.test(tokens[i])) i += 1
+  // Then exec wrappers, each possibly carrying its own options and their values
+  // (nice -n 5, timeout 30, ionice -c 3). Consume what is recognisable and stop
+  // at the first token that is neither; that token is the command word.
+  while (i < tokens.length && EXEC_PREFIXES.has(tokens[i].toLowerCase().replace(/^!+/, ''))) {
+    i += 1
+    while (i < tokens.length && (tokens[i].startsWith('-') || /^\d+[smhd]?$/.test(tokens[i]))) i += 1
+    while (i < tokens.length && ASSIGNMENT_PREFIX.test(tokens[i])) i += 1
+  }
+  return (tokens[i] || '').replace(/^["']+|["']+$/g, '')
 }
 
 /** Normalise a command word to the plain tool name (`C:\bin\curl.exe` -> `curl`). */

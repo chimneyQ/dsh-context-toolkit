@@ -514,6 +514,8 @@ await checkAsync('ctk_doctor cleans up its own probe document', async () => {
 
 console.log('== 12. output slimming and reversible storage ==')
 const slim = await import('file:///' + join(DIR, 'lib', 'compress.js').replace(/\\/g, '/'))
+const gateMod = await import('file:///' + join(DIR, 'index.js').replace(/\\/g, '/'))
+const floodToolName = gateMod.floodToolName
 
 check('a uniform JSON array is re-encoded losslessly', () => {
   const rows = Array.from({ length: 120 }, (_, i) => ({ model: 'm' + i, input: i, output: i * 2 }))
@@ -656,6 +658,37 @@ check('a mere mention of truncation does not exempt a body', () => {
     'an inline mention exempted the body')
   const prose = ('Reticulating splines and discussing output truncated handling. '.repeat(80)) + '\n[output truncated; full output: x] trailing'
   assert.equal(slim.isAlreadyTruncated(prose), null, 'a trailing partial notice exempted the body')
+})
+
+check('the gate peels assignment prefixes and exec wrappers', () => {
+  // Each of these ran a real download and each was waved through before the fix.
+  // The gate reads the *command word* of a segment, so anything that legally sits
+  // in front of that word has to be peeled first, or the gate is inspecting a
+  // variable assignment and calling it safe.
+  const mustBlock = [
+    'FOO=1 curl -s https://x',
+    'PATH=/usr/bin curl -s https://x',
+    'sudo FOO=1 curl -s https://x',
+    'env FOO=1 curl -s https://x',
+    'nice -n 5 curl -s https://x',
+    'timeout 30 curl -s https://x',
+    'ionice -c 3 wget -q -O- https://x',
+  ]
+  for (const line of mustBlock) {
+    assert.notEqual(floodToolName(line), 'other', 'sailed through: ' + line)
+  }
+  // Peeling must not turn every word into a command: these are not downloads.
+  const mustAllow = [
+    'echo wget && echo done',
+    'grep -n curl file.txt',
+    'echo curl-config',
+    'FOO=1 echo hello',
+    'export FOO=1',
+    'nice echo curl',
+  ]
+  for (const line of mustAllow) {
+    assert.equal(floodToolName(line), 'other', 'false denial: ' + line)
+  }
 })
 
 check('a stored original comes back byte-for-byte', () => {

@@ -4,6 +4,9 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
+## 0.3.5
+- **Fixed: four gate bypasses.** The gate asks whether the *command word* of a segment is a flood tool, so anything that legally precedes that word has to be peeled first — otherwise it inspects a variable assignment and calls it safe. Previously missed: `FOO=1 curl …`, `PATH=/x curl …` (assignment prefixes were never peeled), `nice -n 5 curl …`, `timeout 30 curl …` (a wrapper's own options were read as the command word), and `sudo FOO=1 curl …` (the prefix loop capped at two tokens). Prefixes are now peeled as assignment → wrapper → wrapper options → assignment, with seven must-block and six must-allow assertions; two negative controls knock out the assignment peel and the option skip respectively. [`TBD`]
+
 ## 0.3.4
 - **Fixed**: output that a tool already truncated is no longer compressed a second time. An upstream tool (`ops_bash`) truncates its own output and spills the rest to a file, and the sandbox (`ctk_execute`) caps a run at 256 KB and closes with a `~~~` line; this layer used to compress those already-handled bodies again — saving nothing, storing a second copy of the same original, and counting the same traffic twice. Both markers (`[output truncated; full output: …]` and a standalone `~~~` line) are recognised and skipped, and the reason is reported in a new "skip reasons" ledger line. [`038447b`]
 
