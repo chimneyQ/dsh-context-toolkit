@@ -61,7 +61,7 @@ const unique = [...new Set(registered)].sort()
 // ctk tool and that the README lists all of them.
 ck('12 the ctk tools are registered', unique.length === 11 && unique.every((n) => /^ctk_[a-z_]+$/.test(n)), unique.join(','))
 ck('13 README.zh names every registered tool', unique.every((n) => readmeZh.includes(n)), unique.filter((n) => !readmeZh.includes(n)).join(','))
-ck('14 README lists the same count the suite reports', /85 /.test(readmeZh) && /85 checks/.test(readmeEn))
+ck('14 README lists the same count the suite reports', /87 /.test(readmeZh) && /87 checks/.test(readmeEn))
 // The changelog is the document a user reads to learn what changed, so it must exist
 // in both languages with the same version coverage — a Chinese changelog that lags the
 // English one is the same defect as a shrunk README.

@@ -115,7 +115,7 @@ Tool switches: `tools.execute`, `tools.executeFile`, `tools.batchExecute`, `tool
 The offline suites need no DSH runtime:
 
 ```bash
-node smoke.mjs        # 85 checks: contract, runtime discovery, tools, gate (segment matching, host-aligned path base, script_path and host-fetcher coverage), output slimming with reversible retrieval and retention, resource disposal, knowledge base, observability, version reporting
+node smoke.mjs        # 87 checks: contract, runtime discovery, tools, gate (segment matching, host-aligned path base, script_path and host-fetcher coverage), output slimming with reversible retrieval and retention, resource disposal, knowledge base, observability, version reporting
 node test-client.mjs  # 27 checks: browser-half contract and bilingual dictionary parity
 node test-package.mjs # 20 checks: publish manifest and the zero-dependency constraint
 node release-check.mjs # 30 checks: release readiness (manifest, deps, tool count, gate matching, version, SHA coverage, no hardcoded paths)
@@ -147,6 +147,7 @@ At `tools/post-execute`, the strategy follows the shape:
 - **`ctk_execute` timeouts are hard kills**: the child is terminated and `timedOut` is reported.
 - **A single run captures at most 256 KB**; anything beyond is counted but not retained. The text handed back is additionally capped at 4000 characters, so even a 1 MB single-line output cannot enter the conversation whole.
 - **The knowledge base deduplicates by path**: filing the same path again replaces the earlier copy.
+- **Output a tool already truncated is not compressed again.** A body that ends in `[output truncated; full output: …]`, or in a standalone `~~~` line from the sandbox capture cap, is treated as work already done: this layer skips it and counts the reason in the ledger's "skip reasons" line.
 - **The gate is precise, not exhaustive.** A flood tool is refused only when it is the command word of some segment — after exec prefixes (`sudo`, `exec`, …) and path/extension normalisation are stripped — and `script_path` is read up to the first 256 KB. A tool a program invokes internally (`python -c 'import wget'`) is outside its remit.
 - **Paths resolve the way the host resolves them.** For `script_path` and for `read`'s `file_path`, a relative path is resolved against the session working directory — the same base the host uses to open the file. A gate reading that string against its own cwd would miss anything the host can still run.
 

@@ -271,6 +271,8 @@ export function apply(ctx, rawConfig) {
     slimmedBytes: 0,
     slimmedTokens: 0,
     slimSkipped: 0,
+    /** Why a body was left alone — "already truncated upstream" is a saving, not a miss. */
+    slimSkips: {},
     slimStrategies: {},
     blobsStored: 0,
     calls: {},
@@ -544,7 +546,15 @@ function registerOutputSlimmer(ctx, config, stats, store, log) {
           rewritten.push(block)
           continue
         }
-        const outcome = slimText(block.text, { limits, isError })
+        // onSkip records why a body was exempted. "The tool already truncated it" is a
+        // legitimate outcome and belongs in the ledger beside the ones that saved bytes;
+        // otherwise the only visible number is how often this layer did nothing.
+        const outcome = slimText(block.text, {
+          limits,
+          isError,
+          label: name,
+          onSkip: (why) => { stats.slimSkips[why] = (stats.slimSkips[why] || 0) + 1 },
+        })
         if (!outcome) { stats.slimSkipped += 1; rewritten.push(block); continue }
 
         let marker = ''
@@ -1447,6 +1457,7 @@ function registerObservabilityTools(ctx, config, stats, store, storageDir, log) 
           '- 沙箱保留 bytesSandboxed: ' + stats.bytesSandboxed + ' 字节（子进程产出但只回结论的部分）',
           '- 已归档 bytesIndexed: ' + stats.bytesIndexed + ' 字节（存入知识库、未留在对话里）',
           '- 输出瘦身 slimmed: ' + stats.slimmed + ' 块（' + stats.slimmedBytes + ' 字节 ≈ ' + stats.slimmedTokens + ' tokens 未进入上下文；跳过的块 ' + stats.slimSkipped + '）',
+          '- 跳过原因: ' + (Object.keys(stats.slimSkips).length ? Object.keys(stats.slimSkips).map((k) => k + '×' + stats.slimSkips[k]).join(' · ') : '（无）'),
           '- 合计 kept out of context: ' + keptOut + ' 字节 ≈ ' + Math.round(keptOut / 4) + ' tokens（按 4 字节/token 估算）',
           '',
           '### 知识库 / knowledge base',

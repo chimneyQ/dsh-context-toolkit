@@ -627,6 +627,37 @@ check('a blob whose marker could not be delivered is removed by id', () => {
   }
 })
 
+check('output already truncated upstream is exempt, and says why', () => {
+  // The layer above already removed the bytes and stored them elsewhere. Compressing
+  // again saves nothing and stores a second copy of the same original, so the exemption
+  // is the correct outcome — but it has to be reported, or the ledger only shows how
+  // often this layer did nothing.
+  const spill = Array.from({ length: 3000 }, (_, i) => 'row ' + i).join('\n') +
+    '\n[output truncated; full output: C:\\temp\\spill.log]\n'
+  // The sandbox cap is a tilde line of its own, not a suffix glued to the last row:
+  // it sits on its own line in real output, and the detector anchors on that.
+  const capped = 'L'.repeat(60000) + '\n~~~\n'
+  for (const [label, text] of [['spill notice', spill], ['sandbox cap', capped]]) {
+    const seen = []
+    const out = slim.slimText(text, { onSkip: (why) => seen.push(why) })
+    assert.equal(out, null, label + ': an already-truncated body was compressed anyway')
+    assert.equal(seen.length, 1, label + ': the exemption was not reported')
+    // The reason string is part of the contract (it is what the ledger groups by), so the
+    // assertion names the two real values rather than a loose substring of them.
+    assert.ok(/^(upstream spill notice|sandbox capture cap)$/.test(seen[0]), label + ': unexpected reason ' + JSON.stringify(seen[0]))
+    assert.equal(slim.isAlreadyTruncated(text), seen[0], label + ': the detector disagrees with the report')
+  }
+})
+
+check('a mere mention of truncation does not exempt a body', () => {
+  // The notice is a whole line; prose that happens to discuss truncation must still be
+  // eligible, or any document about this feature would exempt itself.
+  assert.equal(slim.isAlreadyTruncated('we saw [output truncated; full output: x] inline'), null,
+    'an inline mention exempted the body')
+  const prose = ('Reticulating splines and discussing output truncated handling. '.repeat(80)) + '\n[output truncated; full output: x] trailing'
+  assert.equal(slim.isAlreadyTruncated(prose), null, 'a trailing partial notice exempted the body')
+})
+
 check('a stored original comes back byte-for-byte', () => {
   const dir2 = mkdtempSync(join(DIR, '.kb-'))
   const st = storeMod.openStore(dir2)
