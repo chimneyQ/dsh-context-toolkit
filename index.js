@@ -1046,13 +1046,6 @@ export function htmlToText(html) {
 }
 
 /**
- * Explain a fetch failure in words that point at a fix.
- *
- * A bare "fetch failed" hides the cause: a host that resolves to 127.0.0.1 is a
- * local DNS interception, a refused connection is a blocked port, and those need
- * different remedies. The chain is walked so the report names the real problem.
- */
-/**
  * The CA bundle ctk_fetch_and_index should trust, or undefined for the default.
  *
  * A machine behind a TLS-inspecting proxy cannot verify public certificates with
@@ -1156,6 +1149,13 @@ export function httpsGetWithCa(url, ca, maxBytes) {
   })
 }
 
+/**
+ * Explain a fetch failure in words that point at a fix.
+ *
+ * A bare "fetch failed" hides the cause: a host that resolves to 127.0.0.1 is a
+ * local DNS interception, a refused connection is a blocked port, and those need
+ * different remedies. The chain is walked so the report names the real problem.
+ */
 export function describeFetchFailure(error, url) {
   const message = String((error && error.message) || error)
   const cause = error && error.cause ? error.cause : null
