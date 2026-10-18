@@ -504,6 +504,17 @@ check('exportCaBundle refuses to overwrite an existing bundle without force', ()
     assert.equal(forced.ok, true, JSON.stringify(forced))
   } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) }
 })
+// The CA row cannot read the settings-form snapshot: that model carries Config
+// fields only, so a bundle taken from it is always empty and the badge lies.
+check('the CA row fetches its own status instead of reading the form snapshot', () => {
+  const client = readFileSync(join(DIR, 'client.js'), 'utf8')
+  const start = client.indexOf('function CaBundleField')
+  assert.ok(start > 0, 'CaBundleField disappeared')
+  const body = client.slice(start, start + 4000)
+  assert.ok(/fetch\(STATUS_PATH/.test(body), 'the row does not read /status')
+  assert.ok(!/state\.data[^\n]*caBundle/.test(body), 'the row is back on the form snapshot')
+})
+
 // The button only exists if the shape reaches the page: a status payload without
 // caBundle renders a permanently missing badge.
 check('the status route reports the bundle', () => {

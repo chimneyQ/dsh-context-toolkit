@@ -4,6 +4,12 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
+## 0.3.10
+- **Fixed: the CA row showed "file not found" even when the bundle was there, and the button appeared to do nothing.** The row read its bundle from the settings-form snapshot (`props.useToolkitCard`), but that model only carries Config fields — it never contains the status payload, so `bundle` was always `{}` and `present` was always false. The server side was correct all along: `/status` returned `present: true` while the badge said otherwise, and the click sent no request at all because the row believed there was nothing to replace.
+- **The row now fetches `/status` itself** on mount and again after every export attempt, so the badge reflects the real file. A `checking…` state covers the first paint instead of flashing "missing".
+- New assertion: the row must call `fetch(STATUS_PATH` and must not read `state.data…caBundle`, so it cannot drift back onto the form snapshot.
+- Offline assertions 100 (up from 99), client 27, packaging 20, release gate 34.
+
 ## 0.3.9
 - **New: the CA bundle can be exported from the settings page.** `caPemPath: auto` has always pointed at `<DSH_HOME>/context-mode/ca/windows-roots.pem`, a file the package has never shipped — so on a fresh machine it simply is not there, and a machine behind a TLS-inspecting proxy stays unable to fetch. The row under `caPemPath` now reports whether that file exists and offers a button that writes it from the host's own root store (`tls.getCACertificates('system')`).
 - **Loading only stats the file.** Presence is answered by a `statSync`; taking the snapshot (~500 certificates, ~820 KB, tens of milliseconds) happens only when the button is pressed.

@@ -94,6 +94,7 @@
     "caCancel": "cancel",
     "caOverwriteAsk": "That file already exists. Overwriting rewrites it from the current system store; the old copy is not kept.",
     "caExported": "exported {kb} KB, {count} certificates",
-    "caExportFailed": "export failed: "
+    "caExportFailed": "export failed: ",
+    "caChecking": "checking…"
   }
 }

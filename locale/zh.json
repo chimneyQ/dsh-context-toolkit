@@ -94,6 +94,7 @@
     "caCancel": "取消",
     "caOverwriteAsk": "该文件已存在。覆盖会用当前系统证书库重写它，原有副本不保留。",
     "caExported": "已导出 {kb} KB / {count} 张证书",
-    "caExportFailed": "导出失败："
+    "caExportFailed": "导出失败：",
+    "caChecking": "检测中…"
   }
 }
