@@ -4,7 +4,7 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
-## 0.3.8
+## 0.3.9
 - **New: the CA bundle can be exported from the settings page.** `caPemPath: auto` has always pointed at `<DSH_HOME>/context-mode/ca/windows-roots.pem`, a file the package has never shipped — so on a fresh machine it simply is not there, and a machine behind a TLS-inspecting proxy stays unable to fetch. The row under `caPemPath` now reports whether that file exists and offers a button that writes it from the host's own root store (`tls.getCACertificates('system')`).
 - **Loading only stats the file.** Presence is answered by a `statSync`; taking the snapshot (~500 certificates, ~820 KB, tens of milliseconds) happens only when the button is pressed.
 - **An existing bundle is never replaced on one click.** The first press asks; only the explicit confirmation sends `force`, so a file the user built by hand cannot be destroyed by a stray click.
