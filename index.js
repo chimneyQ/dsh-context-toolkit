@@ -1101,6 +1101,29 @@ export function autoCaBundlePath(dshHomeDir) {
  * real read plus a comparison against the system store, which is exactly the
  * work the export button exists to trigger on demand.
  */
+/**
+ * HTTP status for an export failure.
+ *
+ * The page distinguishes "the bundle is there, confirm to replace it" from "this
+ * cannot work at all". Returning 409 for both made the first case indistinguishable
+ * from the second, so a read-only path or a Node without getCACertificates looked
+ * like a missing confirmation.
+ *
+ *   409 exists       -> the caller asked for an export and must opt in to overwrite
+ *   422 unsupported  -> this build cannot read the system store
+ *   422 empty        -> the store returned nothing
+ *   500 unwritable   -> the path cannot be written
+ *   500 unreadable   -> the store threw
+ */
+export function statusForExportFailure(reason) {
+  switch (String(reason || '')) {
+    case 'exists': return 409
+    case 'unsupported':
+    case 'empty': return 422
+    default: return 500
+  }
+}
+
 export function describeCaBundle(dshHomeDir) {
   const path = autoCaBundlePath(dshHomeDir)
   try {
@@ -1661,21 +1684,30 @@ function registerStatusRoute(ctx, config, stats, store, storageDir) {
           const method = String((req && req.method) || 'GET').toUpperCase()
           if (method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return }
           // Overwriting an existing bundle needs an explicit opt-in from the caller.
+          // A malformed body must not be silently read as force:false: the caller would
+          // then get "exists" and conclude the export is impossible, when the real
+          // problem was its own request.
           let force = false
           try {
             const chunks = []
             let bytes = 0
             for await (const chunk of req) {
               bytes += chunk.length
-              if (bytes > 8192) break
+              if (bytes > 8192) { req.destroy(); break }
               chunks.push(chunk)
             }
             const body = Buffer.concat(chunks).toString('utf8')
             const parsed = body ? JSON.parse(body) : {}
             force = parsed && parsed.force === true
-          } catch { force = false }
+          } catch (error) {
+            sendJson(res, 400, { ok: false, reason: 'bad-request', message: String((error && error.message) || error) })
+            return
+          }
           const result = exportCaBundle({ force })
-          sendJson(res, result.ok ? 200 : 409, result)
+          // statusFor separates "you must confirm first" from "this will never work":
+          // a client that gets 409 for an unwritable path keeps asking the user to
+          // confirm an overwrite that cannot succeed.
+          sendJson(res, result.ok ? 200 : statusForExportFailure(result.reason), result)
         },
       }), 'context-toolkit: export-ca route')
     })

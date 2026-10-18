@@ -4,6 +4,12 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
+## 0.3.12
+- **Fixed: every export failure returned 409.** "Confirm to overwrite", "this build cannot read the system store", "the store returned nothing" and "the path is not writable" all came back as 409, so the settings row could not tell "press confirm" from "retrying will never help" — it kept offering a confirmation that could not succeed. Now `exists` → 409, `unsupported`/`empty` → 422, everything else → 500, and the row only enters its confirm state on 409.
+- **Fixed: a malformed request body was silently read as `force: false`.** A caller that sent broken JSON got `reason: exists` and would conclude the export was impossible, when the real problem was its own request. It now answers 400 with `bad-request`.
+- The body reader also destroys the request when it passes its 8 KB cap instead of leaving the stream open.
+- Offline assertions 104 (2 new), client 27, packaging 20, release gate 34.
+
 ## 0.3.11
 - **Fixed: "exists" and "not found" could disagree about the same path.** Presence was judged two ways — `describeCaBundle` demanded a regular file, while the export refused to overwrite on a plain `existsSync`, which is also true for a directory. A path occupied by a directory therefore reported "file not found" in the UI while the export refused with `reason: exists`: two contradictory answers, and no way out through the UI. Both sides now go through one definition of "a usable bundle is there".
 - **The write also reports the real reason now.** When the path cannot be replaced, the result says `EISDIR` / `ENOTDIR` instead of pretending the bundle already exists.

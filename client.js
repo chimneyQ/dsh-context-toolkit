@@ -224,8 +224,16 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ force: force === true })
           });
           const data = await response.json().catch(() => null);
-          setResult(data || { ok: false, reason: "empty response" });
-          if (data && data.ok === true) setConfirming(false);
+          // 409 means "confirm to overwrite"; 422/500 mean retrying will not help.
+          // Without the split the row kept offering a confirmation that could never
+          // succeed (a read-only path, a build without getCACertificates).
+          if (response.status === 409) {
+            setResult(null);
+            setConfirming(true);
+          } else {
+            setResult(data || { ok: false, reason: "empty response" });
+            if (data && data.ok === true) setConfirming(false);
+          }
           // Either way the file may have changed: re-stat through the route.
           load();
         } catch (error) {

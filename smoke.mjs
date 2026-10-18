@@ -538,6 +538,27 @@ check('the store bounds its WAL side file', () => {
   assert.ok(/wal_autocheckpoint\s*=\s*\d+/.test(source), 'wal_autocheckpoint disappeared')
 })
 
+// An export failure means different things and the page must be able to tell
+// them apart: "confirm to overwrite" is not the same problem as "this path can
+// never be written".
+check('export failures carry distinct status codes', () => {
+  assert.equal(mod.statusForExportFailure('exists'), 409)
+  assert.equal(mod.statusForExportFailure('unsupported'), 422)
+  assert.equal(mod.statusForExportFailure('empty'), 422)
+  assert.equal(mod.statusForExportFailure('unwritable'), 500)
+  assert.equal(mod.statusForExportFailure('unreadable'), 500)
+  assert.equal(mod.statusForExportFailure(''), 500)
+})
+// A malformed request body must not be read as force:false: the caller would see
+// "exists" and conclude the export is impossible instead of fixing its request.
+check('a malformed export body is reported, not silently downgraded', () => {
+  const source = readFileSync(join(DIR, 'index.js'), 'utf8')
+  const start = source.indexOf("path: EXPORT_CA_PATH")
+  const body = source.slice(start, start + 2200)
+  assert.ok(/reason: 'bad-request'/.test(body), 'a bad body is swallowed again')
+  assert.ok(/statusForExportFailure\(result\.reason\)/.test(body), 'the route is back on a single 409')
+})
+
 // The button only exists if the shape reaches the page: a status payload without
 // caBundle renders a permanently missing badge.
 check('the status route reports the bundle', () => {
