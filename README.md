@@ -91,6 +91,30 @@ await ctk_index({ path: 'D:/specs/api.md' });          // the full text stays in
 await ctk_search({ queries: ['rate limit', 'auth'] });  // only the relevant excerpts come back
 ```
 
+## TLS on a proxy-intercepted network
+
+If every `ctk_fetch_and_index` fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, the machine sits behind a
+TLS-inspecting proxy and Node's built-in roots cannot verify what the proxy presents. `caPemPath`
+names a PEM to trust instead.
+
+`auto` (the default) points at `<DSH_HOME>/context-mode/ca/windows-roots.pem`. **This package does not
+ship that file** — it is a snapshot of the *host's own* root store, so on a fresh machine it simply is
+not there and fetching falls back to Node's default roots.
+
+Settings → Context Toolkit shows a row under `caPemPath`:
+
+- a badge saying whether the file exists (and its size), checked with a stat on page load — the bundle
+  itself is never read just to render the page;
+- a button that writes it from the system root store (`tls.getCACertificates('system')`, ~500
+  certificates, ~820 KB) when pressed.
+
+A bundle that already exists is never replaced on a single click: the first press asks, and only the
+explicit confirmation overwrites it.
+
+**What this does not do:** it exports the *system* store. If the proxy's root certificate was never
+installed into that store — IT pushes it via group policy, for instance — the exported bundle still
+will not verify the proxy. Install the root first, then export.
+
 ## Configuration
 
 | Key | Default | Meaning |
@@ -116,10 +140,10 @@ Tool switches: `tools.execute`, `tools.executeFile`, `tools.batchExecute`, `tool
 The offline suites need no DSH runtime:
 
 ```bash
-node smoke.mjs        # 88 checks: contract, runtime discovery, tools, gate (segment matching, host-aligned path base, script_path and host-fetcher coverage), output slimming with reversible retrieval and retention, resource disposal, knowledge base, observability, version reporting
+node smoke.mjs        # 102 checks: contract, runtime discovery, tools, gate (segment matching, host-aligned path base, script_path and host-fetcher coverage), output slimming with reversible retrieval and retention, CA bundle presence/export, resource disposal, knowledge base, observability, version reporting
 node test-client.mjs  # 27 checks: browser-half contract and bilingual dictionary parity
 node test-package.mjs # 20 checks: publish manifest and the zero-dependency constraint
-node release-check.mjs # 30 checks: release readiness (manifest, deps, tool count, gate matching, version, SHA coverage, no hardcoded paths)
+node release-check.mjs # 34 checks: release readiness (manifest, deps, tool count, gate matching, version, SHA coverage, no hardcoded paths)
 ```
 
 ## Output slimming (after a tool runs)

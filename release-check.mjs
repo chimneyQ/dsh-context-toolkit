@@ -9,6 +9,7 @@
  * Self-relative on purpose: a check that reads a hardcoded path tests the
  * developer's disk, not the bytes about to be published.
  */
+import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -61,7 +62,12 @@ const unique = [...new Set(registered)].sort()
 // ctk tool and that the README lists all of them.
 ck('12 the ctk tools are registered', unique.length === 11 && unique.every((n) => /^ctk_[a-z_]+$/.test(n)), unique.join(','))
 ck('13 README.zh names every registered tool', unique.every((n) => readmeZh.includes(n)), unique.filter((n) => !readmeZh.includes(n)).join(','))
-ck('14 README lists the same count the suite reports', /88 /.test(readmeZh) && /88 checks/.test(readmeEn))
+// The number in the README used to be hardcoded here as 88, so it silently rotted
+// every time an assertion was added. Read the count the offline suite actually
+// reports and require both READMEs to agree with it.
+const smokeRun = execFileSync(process.execPath, ['smoke.mjs'], { cwd: pub, encoding: 'utf8' })
+const smokeCount = Number((smokeRun.match(/ALL PASS \((\d+)\)/) || [])[1] || 0)
+ck('14 README lists the same count the suite reports', smokeCount > 0 && readmeZh.includes(String(smokeCount) + ' 项') && readmeEn.includes(String(smokeCount) + ' checks'), 'suite=' + smokeCount)
 // The changelog is the document a user reads to learn what changed, so it must exist
 // in both languages with the same version coverage — a Chinese changelog that lags the
 // English one is the same defect as a shrunk README.

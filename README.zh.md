@@ -92,6 +92,24 @@ await ctk_index({ path: 'D:/specs/api.md' });          // 全文留在库里
 await ctk_search({ queries: ['rate limit', 'auth'] });  // 只取相关片段
 ```
 
+## 代理拦截网络下的 TLS
+
+如果每次 `ctk_fetch_and_index` 都失败于 `UNABLE_TO_VERIFY_LEAF_SIGNATURE`，说明本机处在 TLS 中间人检查
+的环境里，Node 内置根证书无法验证代理出示的证书链。`caPemPath` 用来指定一份要信任的 PEM。
+
+`auto`（默认）指向 `<DSH_HOME>/context-mode/ca/windows-roots.pem`。**本包不附带这个文件** —— 它是
+*本机自己*根证书库的一份快照，所以在全新机器上它根本不存在，抓取会退回 Node 默认根证书。
+
+设置 → 上下文工具箱，`caPemPath` 下方有一行：
+
+- 一个徽标，显示该文件是否存在（以及大小）—— 打开页面时只做一次 stat，**不会为了渲染页面去读整份证书包**；
+- 一个按钮，按下时才从系统根证书库（`tls.getCACertificates('system')`，约 500 张证书、约 820 KB）写出它。
+
+已存在的证书包不会被一次点击覆盖：首次点击只是询问，只有明确确认才会覆盖。
+
+**这个按钮不做什么：** 它导出的是**系统**证书库。若代理的根证书从未被装进该系统库（例如 IT 通过组策略推送），
+导出的包仍然无法验证该代理。请先安装根证书，再导出。
+
 ## 配置
 
 | 键 | 默认 | 含义 |
@@ -117,10 +135,10 @@ await ctk_search({ queries: ['rate limit', 'auth'] });  // 只取相关片段
 离线套件不依赖 DSH 运行时：
 
 ```bash
-node smoke.mjs        # 88 项：契约、运行时探测、工具、门禁（分段匹配 + 路径基准对齐 + script_path 与取网页工具覆盖）、输出瘦身与可逆取回及保留期、资源释放、知识库、观测、版本自述
+node smoke.mjs        # 102 项：契约、运行时探测、工具、门禁（分段匹配 + 路径基准对齐 + script_path 与取网页工具覆盖）、输出瘦身与可逆取回及保留期、证书包存在性与导出、资源释放、知识库、观测、版本自述
 node test-client.mjs  # 27 项：浏览器半体契约与双语字典一致性
 node test-package.mjs # 20 项：发布清单与零依赖约束
-node release-check.mjs # 30 项：发布就绪（清单/依赖/工具数/门禁匹配/版本/SHA 覆盖/无硬编码路径）
+node release-check.mjs # 34 项：发布就绪（清单/依赖/工具数/门禁匹配/版本/SHA 覆盖/无硬编码路径）
 ```
 
 ## 输出瘦身（工具执行后）
