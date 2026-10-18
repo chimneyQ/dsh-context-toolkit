@@ -10,6 +10,7 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
 import https from 'node:https'
+import { createSecureContext } from 'node:tls'
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { dirname } from 'node:path'
@@ -462,6 +463,62 @@ check('htmlToText strips markup, scripts and styles', () => {
   assert.ok(!/var x|<style|\{\}/.test(text), 'markup survived: ' + text)
   assert.ok(/T/.test(text) && /p&q/.test(text), text)
 })
+// Export is a click, not a load: describeCaBundle must answer from a stat alone,
+// and exportCaBundle must refuse to clobber a file the user may have built.
+check('describeCaBundle reports a missing file without reading one', () => {
+  const dir = mkdtempSync(join(DIR, '.ca-'))
+  try {
+    const got = mod.describeCaBundle(dir)
+    assert.equal(got.present, false, JSON.stringify(got))
+    assert.ok(/context-mode/.test(got.path), got.path)
+    assert.equal(got.reason, 'ENOENT', got.reason)
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) }
+})
+check('exportCaBundle writes a usable PEM and then reports it present', () => {
+  const dir = mkdtempSync(join(DIR, '.ca-'))
+  try {
+    const wrote = mod.exportCaBundle({ dshHomeDir: dir })
+    if (wrote.ok !== true) {
+      // A build without tls.getCACertificates cannot export; say so rather than pass.
+      console.log('  [skip] this Node cannot read the system store: ' + (wrote.reason || ''))
+      return
+    }
+    const pem = readFileSync(wrote.path, 'utf8')
+    assert.ok(pem.includes('BEGIN CERTIFICATE'), 'not a PEM')
+    assert.ok(wrote.count > 0, 'no certificates reported')
+    createSecureContext({ ca: pem })
+    const seen = mod.describeCaBundle(dir)
+    assert.equal(seen.present, true, JSON.stringify(seen))
+    assert.equal(seen.bytes, wrote.bytes, 'the stat disagrees with what was written')
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) }
+})
+check('exportCaBundle refuses to overwrite an existing bundle without force', () => {
+  const dir = mkdtempSync(join(DIR, '.ca-'))
+  try {
+    const first = mod.exportCaBundle({ dshHomeDir: dir })
+    if (first.ok !== true) { console.log('  [skip] cannot export on this build'); return }
+    const again = mod.exportCaBundle({ dshHomeDir: dir })
+    assert.equal(again.ok, false, JSON.stringify(again))
+    assert.equal(again.reason, 'exists', again.reason)
+    const forced = mod.exportCaBundle({ dshHomeDir: dir, force: true })
+    assert.equal(forced.ok, true, JSON.stringify(forced))
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) }
+})
+// The button only exists if the shape reaches the page: a status payload without
+// caBundle renders a permanently missing badge.
+check('the status route reports the bundle', () => {
+  const source = readFileSync(join(DIR, 'index.js'), 'utf8')
+  assert.ok(/caBundle:\s*describeCaBundle\(\)/.test(source), 'status payload lost caBundle')
+  assert.ok(/EXPORT_CA_PATH/.test(source), 'the export route constant disappeared')
+  assert.ok(/exportCaBundle\(\{ force \}\)/.test(source), 'the export route no longer calls exportCaBundle')
+})
+// Loading must stay a stat: a readFileSync in the load path would cost 800 KB.
+check('plugin load does not read the CA bundle', () => {
+  const source = readFileSync(join(DIR, 'index.js'), 'utf8')
+  const applyBody = source.slice(source.indexOf('export function apply('), source.indexOf('export function apply(') + 4000)
+  assert.ok(!/readFileSync\([^)]*ca/i.test(applyBody), 'apply() reads the CA file')
+})
+
 // The CA path reads the body by hand, so it owns its own size cap. It used to
 // destroy the response on hitting fetchMaxBytes without ever settling, which
 // left the promise pending until the tool timeout — a page bigger than the cap

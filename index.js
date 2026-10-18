@@ -20,7 +20,8 @@
 import { homedir } from 'node:os'
 import http from 'node:http'
 import https from 'node:https'
-import { existsSync, statSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, statSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import tls from 'node:tls'
 import { join, isAbsolute, resolve, basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runProcess, availableRuntimes, probeRuntimes, shellPlan, scratchDir } from './lib/runner.js'
@@ -1083,6 +1084,77 @@ export function resolveCaBundle(setting, dshHomeDir) {
 }
 
 /**
+ * The path `caPemPath: 'auto'` resolves to, whether or not it exists.
+ *
+ * Split out from resolveCaBundle because the settings page needs to report the
+ * file's presence on load — and that must stay a stat, not a read of 800 KB.
+ */
+export function autoCaBundlePath(dshHomeDir) {
+  const home = dshHomeDir || process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(home, 'context-mode', 'ca', 'windows-roots.pem')
+}
+
+/**
+ * Whether the `auto` bundle is on disk, cheaply enough to run inside apply().
+ *
+ * This answers "is there a file", never "is it current": freshness would need a
+ * real read plus a comparison against the system store, which is exactly the
+ * work the export button exists to trigger on demand.
+ */
+export function describeCaBundle(dshHomeDir) {
+  const path = autoCaBundlePath(dshHomeDir)
+  try {
+    const stat = statSync(path)
+    if (!stat.isFile()) return { path, present: false, reason: 'not a file' }
+    return { path, present: true, bytes: stat.size, mtime: new Date(stat.mtimeMs).toISOString() }
+  } catch (error) {
+    return { path, present: false, reason: String((error && error.code) || error) }
+  }
+}
+
+/**
+ * Write the host's own root store to the bundle `auto` points at.
+ *
+ * Only ever runs when the user asks: exporting means reading ~500 certificates
+ * (~800 KB, tens of milliseconds), which is too much to do on every load. The
+ * result is a snapshot, so it is stamped with the time it was taken.
+ *
+ * A bundle that already exists is left alone unless `force` is set — overwriting
+ * one silently would discard a file the user may have built themselves.
+ */
+export function exportCaBundle(options = {}) {
+  const home = options.dshHomeDir
+  const path = autoCaBundlePath(home)
+  const force = options.force === true
+  if (!force && existsSync(path)) {
+    const stat = statSync(path)
+    return { ok: false, reason: 'exists', path, bytes: stat.size }
+  }
+  if (typeof tls.getCACertificates !== 'function') {
+    return { ok: false, reason: 'unsupported', path, message: 'this Node build cannot read the system root store' }
+  }
+  let certificates
+  try {
+    certificates = tls.getCACertificates('system')
+  } catch (error) {
+    return { ok: false, reason: 'unreadable', path, message: String((error && error.message) || error) }
+  }
+  const list = Array.isArray(certificates) ? certificates.filter((entry) => typeof entry === 'string' && entry.length > 0) : []
+  if (!list.length) return { ok: false, reason: 'empty', path, message: 'the system root store returned no certificates' }
+  // tls.getCACertificates hands back bare base64 bodies; PEM headers are ours to add.
+  const pem = list.map((entry) => (entry.includes('BEGIN CERTIFICATE')
+    ? entry
+    : '-----BEGIN CERTIFICATE-----\n' + (entry.match(/.{1,64}/g) || []).join('\n') + '\n-----END CERTIFICATE-----\n')).join('')
+  try {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, pem, 'utf8')
+  } catch (error) {
+    return { ok: false, reason: 'unwritable', path, message: String((error && error.message) || error) }
+  }
+  return { ok: true, path, bytes: Buffer.byteLength(pem, 'utf8'), count: list.length, force }
+}
+
+/**
  * GET a URL with an explicit TLS trust store, using only node:https.
  *
  * The built-in fetch() has no per-call way to supply a CA bundle: its
@@ -1442,6 +1514,7 @@ function recordSandbox(stats, tool, result, reportChars) {
 // ── context occupancy ──────────────────────────────────────────────────────
 
 export const STATUS_PATH = '/_dsh/context-toolkit/status'
+export const EXPORT_CA_PATH = '/_dsh/context-toolkit/export-ca'
 
 /**
  * Measure one session's occupancy through the host's own meter.
@@ -1571,12 +1644,37 @@ function registerStatusRoute(ctx, config, stats, store, storageDir) {
             })(),
             sessionLookup: { source: sessionSource },
             storage: storageDir,
+            caBundle: describeCaBundle(),
           })
         } catch (error) {
           sendJson(res, 500, { error: String((error && error.message) || error) })
         }
       }
       scoped.effect(() => server.register({ kind: 'exact', path: STATUS_PATH, handler }), 'context-toolkit: status route')
+      scoped.effect(() => server.register({
+        kind: 'exact',
+        path: EXPORT_CA_PATH,
+        handler: async (req, res) => {
+          const method = String((req && req.method) || 'GET').toUpperCase()
+          if (method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return }
+          // Overwriting an existing bundle needs an explicit opt-in from the caller.
+          let force = false
+          try {
+            const chunks = []
+            let bytes = 0
+            for await (const chunk of req) {
+              bytes += chunk.length
+              if (bytes > 8192) break
+              chunks.push(chunk)
+            }
+            const body = Buffer.concat(chunks).toString('utf8')
+            const parsed = body ? JSON.parse(body) : {}
+            force = parsed && parsed.force === true
+          } catch { force = false }
+          const result = exportCaBundle({ force })
+          sendJson(res, result.ok ? 200 : 409, result)
+        },
+      }), 'context-toolkit: export-ca route')
     })
   } catch { /* a missing web server must not stop the plugin from loading */ }
 }

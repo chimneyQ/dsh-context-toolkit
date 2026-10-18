@@ -80,6 +80,20 @@
     "tools.doctorHint": "出现异常（子进程跑不起来、索引失败）时先跑它定位。",
     "tools.contextReport": "ctk_context_report（会话上下文占用报告）",
     "tools.contextReportHint": "让模型可以主动查询本会话的上下文占用与构成。",
-    "restart": "需重启"
+    "restart": "需重启",
+    "caPemPath": "TLS 信任链（CA 证书）",
+    "caPemPathHint": "auto = 用 <DSH_HOME>/context-mode/ca/windows-roots.pem（本机导出的系统根证书）；也可填某个 PEM 的绝对路径；留空 = 用 Node 默认信任链。企业代理拦截 HTTPS 导致抓取报证书错误时，配这一项。",
+    "caBundleTitle": "本机证书包（从系统证书库导出）",
+    "caBundleHint": "auto 指向的 PEM 是否存在。点按钮从系统证书库导出；若抓取仍报握手失败，说明代理根证书没有被装进系统证书库。",
+    "caPresent": "已存在 {kb} KB",
+    "caMissing": "未找到该文件",
+    "caExport": "导出到 auto 路径",
+    "caReexport": "重新导出",
+    "caExporting": "导出中…",
+    "caOverwrite": "确认覆盖",
+    "caCancel": "取消",
+    "caOverwriteAsk": "该文件已存在。覆盖会用当前系统证书库重写它，原有副本不保留。",
+    "caExported": "已导出 {kb} KB / {count} 张证书",
+    "caExportFailed": "导出失败："
   }
 }

@@ -4,6 +4,13 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
+## 0.3.8
+- **New: the CA bundle can be exported from the settings page.** `caPemPath: auto` has always pointed at `<DSH_HOME>/context-mode/ca/windows-roots.pem`, a file the package has never shipped — so on a fresh machine it simply is not there, and a machine behind a TLS-inspecting proxy stays unable to fetch. The row under `caPemPath` now reports whether that file exists and offers a button that writes it from the host's own root store (`tls.getCACertificates('system')`).
+- **Loading only stats the file.** Presence is answered by a `statSync`; taking the snapshot (~500 certificates, ~820 KB, tens of milliseconds) happens only when the button is pressed.
+- **An existing bundle is never replaced on one click.** The first press asks; only the explicit confirmation sends `force`, so a file the user built by hand cannot be destroyed by a stray click.
+- **What the button does not do:** it exports the *system* store. If the proxy root was never installed into that store, the exported bundle is still not enough — the row says so rather than promising a fix.
+- Offline assertions 99 (up from 94), client 27, packaging 20, release gate 34.
+
 ## 0.3.7
 - **Fixed: a page larger than `fetchMaxBytes` hung `ctk_fetch_and_index` forever.** The CA path reads the body by hand, and on reaching the cap it called `response.destroy()` without settling the promise - no `resolve`, no `reject`. The tool then sat there until its own 180 s timeout. Only the CA branch could hit this: the no-CA branch still uses the built-in `fetch`, which caps nothing and never read this code.
 - **Fix.** Every exit now goes through one `finish()`: the cap reached, the body ended, or a read error. Reaching the cap stops the stream and hands back the bytes that fit, so a truncated body is a normal result rather than a hang.

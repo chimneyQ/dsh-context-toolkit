@@ -80,6 +80,20 @@
     "tools.doctorHint": "Run it first when a child process or indexing misbehaves.",
     "tools.contextReport": "ctk_context_report (session context occupancy report)",
     "tools.contextReportHint": "Lets the model ask for this session context occupancy and composition.",
-    "restart": "needs a restart"
+    "restart": "needs a restart",
+    "caPemPath": "TLS trust store (CA bundle)",
+    "caPemPathHint": "auto = use <DSH_HOME>/context-mode/ca/windows-roots.pem (this machine's exported system roots); or give an absolute path to a PEM; empty = Node's default roots. Set this when a TLS-inspecting proxy makes fetches fail on certificate errors.",
+    "caBundleTitle": "Local certificate bundle (exported from the system store)",
+    "caBundleHint": "Whether the PEM that auto points at exists. The button exports from the system certificate store; if fetching still fails the handshake, the proxy root was never installed into that store.",
+    "caPresent": "present, {kb} KB",
+    "caMissing": "file not found",
+    "caExport": "export to the auto path",
+    "caReexport": "re-export",
+    "caExporting": "exporting…",
+    "caOverwrite": "overwrite",
+    "caCancel": "cancel",
+    "caOverwriteAsk": "That file already exists. Overwriting rewrites it from the current system store; the old copy is not kept.",
+    "caExported": "exported {kb} KB, {count} certificates",
+    "caExportFailed": "export failed: "
   }
 }
