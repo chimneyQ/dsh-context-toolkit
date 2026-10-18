@@ -4,6 +4,12 @@
 
 本文件按版本记录用户可感知的变化。方括号内为对应提交。
 
+## 0.3.7
+- **修复：响应体超过 `fetchMaxBytes` 时 `ctk_fetch_and_index` 永久挂起**。CA 分支自己读 body，达到上限时只调了 `response.destroy()`，既没有 `resolve` 也没有 `reject`，Promise 永远悬着，工具只能等到自身 180 秒超时。只有 CA 分支会命中：无 CA 时仍走内置 `fetch`，不设上限，也读不到这段代码。
+- **修法**：所有出口统一走一个 `finish()` —— 达到上限、正常读完、读出错三种情况都能收口；达到上限时停止读取并交回已读部分，于是「被截断的正文」是正常结果而非挂起。
+- **为什么此前没发现**：`httpsGetWithCa` 没有导出，也没有任何断言碰过它；原有 4 条 `caPemPath` 断言全部只覆盖 `resolveCaBundle`，那条路径根本不读 body。现新增断言用真实本地 HTTPS 服务、对一次性 CA 完成握手、以 64 KB 上限读取 3 MB 正文：旧代码会在 5 秒判据上失败，现在通过；另有一条断言固定小正文路径，防止为加上限而改坏正常读取。
+- 离线断言 94 项（新增 2 项），客户端 27 项，打包 20 项，发布门 34 项。
+
 ## 0.3.6
 - **修复：`caPemPath` 是个什么都不做的设置。** 这个键从首个提交起就写在本插件自带的 `cordis.patch.yml` 里，注释还写着「每个值都会经 Config schema 校验」——但它从不在 schema 中、`index.js` 里零引用、两版 README 也从未提及。zod 的 loose 模式把它静默放过，于是它看起来可配置，实际毫无作用。现在它是真的了：有声明、有读取、有生效。
 - **为什么这件事在本机很重要。** `ctk_fetch_and_index` 抓不到任何一个公网页面：所有 https 请求都因 `UNABLE_TO_VERIFY_LEAF_SIGNATURE` 失败，因为 Node 内置根证书不含本机的 TLS 拦截证书。插件甚至有一条分支专门**描述**这个失败（「A local interception certificate is the usual cause」），却没有提供任何修复途径。

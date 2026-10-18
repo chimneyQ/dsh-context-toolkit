@@ -4,6 +4,12 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
+## 0.3.7
+- **Fixed: a page larger than `fetchMaxBytes` hung `ctk_fetch_and_index` forever.** The CA path reads the body by hand, and on reaching the cap it called `response.destroy()` without settling the promise - no `resolve`, no `reject`. The tool then sat there until its own 180 s timeout. Only the CA branch could hit this: the no-CA branch still uses the built-in `fetch`, which caps nothing and never read this code.
+- **Fix.** Every exit now goes through one `finish()`: the cap reached, the body ended, or a read error. Reaching the cap stops the stream and hands back the bytes that fit, so a truncated body is a normal result rather than a hang.
+- **Why it was missed.** `httpsGetWithCa` was not exported and no assertion touched it - the four existing `caPemPath` assertions all covered `resolveCaBundle`, which never reads a body. The suite now starts a real local HTTPS server, completes a handshake against a throwaway CA, and reads a 3 MB body through a 64 KB cap: it fails on the old code by exceeding a 5 s deadline, and passes now. A second assertion pins the ordinary small-body path so the cap work cannot break it.
+- Offline assertions 94 (up from 92), client 27, packaging 20, release gate 34.
+
 ## 0.3.6
 - **Fixed: `caPemPath` was a setting that did nothing.** The key has been in this plugin's own `cordis.patch.yml` since the first commit, annotated "validated against the plugin's Config schema" - but it was never in the schema, never read anywhere in `index.js`, and never mentioned in either README. zod's loose mode let it through silently, so it looked configurable while having no effect whatsoever. It is now real: announced, read, and honoured.
 - **Why it matters here.** `ctk_fetch_and_index` could not fetch a single public page on this machine: every https request failed with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` because Node's built-in roots do not include the local TLS-inspection certificate. The plugin even had a branch that *described* that failure ("a local interception certificate is the usual cause") without offering any way to fix it.

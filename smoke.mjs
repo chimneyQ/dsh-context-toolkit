@@ -8,6 +8,8 @@
  * covered by assertions rather than assumed.
  */
 import { strict as assert } from 'node:assert'
+import { execFileSync } from 'node:child_process'
+import https from 'node:https'
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { dirname } from 'node:path'
@@ -459,6 +461,82 @@ check('htmlToText strips markup, scripts and styles', () => {
   const text = mod.htmlToText(html)
   assert.ok(!/var x|<style|\{\}/.test(text), 'markup survived: ' + text)
   assert.ok(/T/.test(text) && /p&q/.test(text), text)
+})
+// The CA path reads the body by hand, so it owns its own size cap. It used to
+// destroy the response on hitting fetchMaxBytes without ever settling, which
+// left the promise pending until the tool timeout — a page bigger than the cap
+// simply hung. These read real bytes off a local HTTPS server so the whole
+// path (handshake with the CA, body cap, settle) is exercised, not just a stub.
+check('httpsGetWithCa resolves on a body larger than its cap instead of hanging', async () => {
+  const dir = mkdtempSync(join(DIR, '.ca-'))
+  const cert = join(dir, 'cert.pem')
+  const key = join(dir, 'key.pem')
+  try {
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=localhost',
+      '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost'], { stdio: 'pipe' })
+  } catch {
+    // No openssl on this machine: the assertion cannot run, and pretending it
+    // passed would be worse than saying so.
+    console.log('  [skip] openssl unavailable, the oversize-body case was not proven')
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+    return
+  }
+  const pem = readFileSync(cert, 'utf8')
+  const BODY = Buffer.alloc(3 * 1024 * 1024, 'x')
+  const server = https.createServer(
+    { key: readFileSync(key), cert: readFileSync(cert) },
+    (req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(BODY) },
+  )
+  await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  const port = server.address().port
+  const CAP = 64 * 1024
+  const started = Date.now()
+  let got
+  try {
+    got = await Promise.race([
+      mod.httpsGetWithCa('https://127.0.0.1:' + port + '/big', pem, CAP),
+      new Promise((_, fail) => setTimeout(() => fail(new Error('still pending after 5s')), 5000)),
+    ])
+  } finally {
+    server.close()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+  }
+  assert.equal(got.status, 200, JSON.stringify(got).slice(0, 120))
+  assert.ok(got.text.length > 0, 'the body came back empty')
+  assert.ok(got.text.length <= CAP, 'the cap was not honoured: ' + got.text.length)
+  assert.ok(Date.now() - started < 5000, 'settling took too long')
+})
+check('httpsGetWithCa still returns a small body untouched', async () => {
+  const dir = mkdtempSync(join(DIR, '.ca-'))
+  const cert = join(dir, 'cert.pem')
+  const key = join(dir, 'key.pem')
+  let ready = true
+  try {
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=localhost',
+      '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost'], { stdio: 'pipe' })
+  } catch { ready = false }
+  if (!ready) {
+    console.log('  [skip] openssl unavailable, the small-body case was not proven')
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+    return
+  }
+  const pem = readFileSync(cert, 'utf8')
+  const server = https.createServer(
+    { key: readFileSync(key), cert: readFileSync(cert) },
+    (req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('hello-ca') },
+  )
+  await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  const port = server.address().port
+  try {
+    const got = await mod.httpsGetWithCa('https://127.0.0.1:' + port + '/small', pem, 1024 * 1024)
+    assert.equal(got.status, 200)
+    assert.equal(got.text, 'hello-ca')
+  } finally {
+    server.close()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+  }
 })
 check('a fetch failure names a loopback refusal instead of "fetch failed"', () => {
   const err = new Error('fetch failed')

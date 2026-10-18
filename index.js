@@ -1104,8 +1104,9 @@ export function resolveCaBundle(setting, dshHomeDir) {
  * @param maxBytes body cap.
  * @returns { status, text } once the whole body is read.
  */
-function httpsGetWithCa(url, ca, maxBytes) {
+export function httpsGetWithCa(url, ca, maxBytes) {
   return new Promise((resolve, reject) => {
+    let settled = false
     const target = new URL(url)
     const lib = target.protocol === 'http:' ? http : https
     const req = lib.get(target, {
@@ -1125,16 +1126,30 @@ function httpsGetWithCa(url, ca, maxBytes) {
       }
       const chunks = []
       let bytes = 0
+      // Settling more than once is a no-op, so every exit below can just call it.
+      const finish = () => {
+        if (settled) return
+        settled = true
+        resolve({ status, text: Buffer.concat(chunks).toString('utf8').slice(0, maxBytes) })
+      }
       response.on('data', chunk => {
-        if (bytes >= maxBytes) { response.destroy(); return }
+        if (bytes >= maxBytes) {
+          // The cap was reached: stop reading and hand back what fits. Destroying
+          // the response without settling left the promise pending forever, so a
+          // page larger than fetchMaxBytes hung the tool until its own timeout.
+          response.destroy()
+          finish()
+          return
+        }
         chunks.push(chunk)
         bytes += chunk.length
+        if (bytes >= maxBytes) {
+          response.destroy()
+          finish()
+        }
       })
-      response.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8').slice(0, maxBytes)
-        resolve({ status, text })
-      })
-      response.on('error', reject)
+      response.on('end', finish)
+      response.on('error', error => { if (!settled) { settled = true; reject(error) } })
     })
     req.on('timeout', () => { req.destroy(new Error('the connection timed out')) })
     req.on('error', reject)
