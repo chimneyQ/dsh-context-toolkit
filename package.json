@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-toolkit",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "DeepSeek Harness bundle: native ctk_* sandbox tools, a routing gate that keeps bulk output out of the transcript, and a local full-text knowledge base. No third-party runtime dependencies.",
   "repository": {
     "type": "git",

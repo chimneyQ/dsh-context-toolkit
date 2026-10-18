@@ -4,6 +4,12 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
+## 0.3.11
+- **Fixed: "exists" and "not found" could disagree about the same path.** Presence was judged two ways — `describeCaBundle` demanded a regular file, while the export refused to overwrite on a plain `existsSync`, which is also true for a directory. A path occupied by a directory therefore reported "file not found" in the UI while the export refused with `reason: exists`: two contradictory answers, and no way out through the UI. Both sides now go through one definition of "a usable bundle is there".
+- **The write also reports the real reason now.** When the path cannot be replaced, the result says `EISDIR` / `ENOTDIR` instead of pretending the bundle already exists.
+- **WAL is bounded.** `PRAGMA wal_autocheckpoint = 400` keeps `knowledge.db-wal` near 1.6 MB instead of letting the default 1000-page threshold leave a multi-megabyte side file behind.
+- Offline assertions 100, client 27, packaging 20, release gate 34.
+
 ## 0.3.10
 - **Fixed: the CA row showed "file not found" even when the bundle was there, and the button appeared to do nothing.** The row read its bundle from the settings-form snapshot (`props.useToolkitCard`), but that model only carries Config fields — it never contains the status payload, so `bundle` was always `{}` and `present` was always false. The server side was correct all along: `/status` returned `present: true` while the badge said otherwise, and the click sent no request at all because the row believed there was nothing to replace.
 - **The row now fetches `/status` itself** on mount and again after every export attempt, so the badge reflects the real file. A `checking…` state covers the first paint instead of flashing "missing".

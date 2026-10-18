@@ -515,6 +515,29 @@ check('the CA row fetches its own status instead of reading the form snapshot', 
   assert.ok(!/state\.data[^\n]*caBundle/.test(body), 'the row is back on the form snapshot')
 })
 
+// A directory occupying the path used to read as "exists" to the export and
+// "missing" to the badge: two contradictory answers, no way out through the UI.
+check('an occupied path is not a bundle: presence and export agree', () => {
+  const dir = mkdtempSync(join(DIR, '.ca-'))
+  try {
+    const target = join(dir, 'context-mode', 'ca', 'windows-roots.pem')
+    mkdirSync(target, { recursive: true })
+    const seen = mod.describeCaBundle(dir)
+    assert.equal(seen.present, false, JSON.stringify(seen))
+    assert.equal(seen.reason, 'not a file', seen.reason)
+    const wrote = mod.exportCaBundle({ dshHomeDir: dir })
+    // It must not claim "exists" (there is no usable bundle); it must report why it
+    // could not write instead.
+    assert.notEqual(wrote.reason, 'exists', JSON.stringify(wrote))
+    assert.equal(wrote.ok, false, JSON.stringify(wrote))
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }) }
+})
+// WAL must not grow unbounded: the pragma is the only thing keeping it bounded.
+check('the store bounds its WAL side file', () => {
+  const source = readFileSync(join(DIR, 'lib', 'store.js'), 'utf8')
+  assert.ok(/wal_autocheckpoint\s*=\s*\d+/.test(source), 'wal_autocheckpoint disappeared')
+})
+
 // The button only exists if the shape reaches the page: a status payload without
 // caBundle renders a permanently missing badge.
 check('the status route reports the bundle', () => {

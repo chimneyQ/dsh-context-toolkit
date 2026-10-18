@@ -1126,9 +1126,12 @@ export function exportCaBundle(options = {}) {
   const home = options.dshHomeDir
   const path = autoCaBundlePath(home)
   const force = options.force === true
-  if (!force && existsSync(path)) {
-    const stat = statSync(path)
-    return { ok: false, reason: 'exists', path, bytes: stat.size }
+  // "Exists" must mean "a usable bundle is there", not "that path is occupied":
+  // a directory (or a file with no certificate in it) is not a bundle, and calling
+  // it "exists" would refuse the very export that could replace it.
+  const current = describeCaBundle(home)
+  if (!force && current.present === true) {
+    return { ok: false, reason: 'exists', path, bytes: current.bytes }
   }
   if (typeof tls.getCACertificates !== 'function') {
     return { ok: false, reason: 'unsupported', path, message: 'this Node build cannot read the system root store' }
