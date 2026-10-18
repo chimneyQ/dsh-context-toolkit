@@ -106,6 +106,7 @@ await ctk_search({ queries: ['rate limit', 'auth'] });  // 只取相关片段
 | `searchLimit` | `5` | `ctk_search` 每次查询的片段数上限 |
 | `snippetChars` | `900` | 每个片段的字符上限 |
 | `fetchMaxBytes` | `2000000` | 单页抓取上限 |
+| `caPemPath` | `auto` | `ctk_fetch_and_index` 的 TLS 信任链：`auto` = `<DSH_HOME>/context-mode/ca/windows-roots.pem`；也可填 PEM 绝对路径；留空 = Node 默认根证书。企业代理拦截 HTTPS 导致每次抓取都报证书错误时配它。 |
 | `storageDir` | 空 | 知识库根目录，空 = `<DSH_HOME>/context-toolkit` |
 | `tools.*` | 见下 | 逐个工具的开关 |
 

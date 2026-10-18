@@ -466,6 +466,36 @@ check('a fetch failure names a loopback refusal instead of "fetch failed"', () =
   const text = mod.describeFetchFailure(err, 'https://example.com')
   assert.ok(/loopback/.test(text), text)
 })
+// caPemPath used to be a declared-but-unread knob: the setting existed, the
+// schema did not, and nothing consumed it. These pin the three branches so it
+// cannot silently go back to being decorative.
+check('caPemPath "" means the default trust store', () => {
+  const got = mod.resolveCaBundle('')
+  assert.equal(got.pem, undefined, JSON.stringify(got))
+  assert.equal(got.source, 'default roots', got.source)
+})
+check('caPemPath resolves a real PEM file', () => {
+  const dir = mkdtempSync(join(DIR, '.ca-'))
+  const pem = join(dir, 'roots.pem')
+  writeFileSync(pem, '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n', 'utf8')
+  const got = mod.resolveCaBundle(pem)
+  assert.ok(typeof got.pem === 'string' && got.pem.includes('BEGIN CERTIFICATE'), JSON.stringify(got).slice(0, 120))
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+})
+check('caPemPath reports an unreadable path instead of silently ignoring it', () => {
+  const got = mod.resolveCaBundle(join(DIR, '.definitely-missing.pem'))
+  assert.equal(got.pem, undefined, JSON.stringify(got))
+  assert.ok(/cannot read/.test(got.source), got.source)
+})
+check('caPemPath rejects a file that holds no certificate', () => {
+  const dir = mkdtempSync(join(DIR, '.ca2-'))
+  const pem = join(dir, 'empty.pem')
+  writeFileSync(pem, 'not a certificate', 'utf8')
+  const got = mod.resolveCaBundle(pem)
+  assert.equal(got.pem, undefined, JSON.stringify(got))
+  assert.ok(/no certificate/.test(got.source), got.source)
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+})
 try { kb.close() } catch { /* best effort */ }
 try { rmSync(kbDir, { recursive: true, force: true, maxRetries: 5 }) } catch { /* best effort */ }
 

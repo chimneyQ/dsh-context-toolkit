@@ -4,6 +4,13 @@
 
 本文件按版本记录用户可感知的变化。方括号内为对应提交。
 
+## 0.3.6
+- **修复：`caPemPath` 是个什么都不做的设置。** 这个键从首个提交起就写在本插件自带的 `cordis.patch.yml` 里，注释还写着「每个值都会经 Config schema 校验」——但它从不在 schema 中、`index.js` 里零引用、两版 README 也从未提及。zod 的 loose 模式把它静默放过，于是它看起来可配置，实际毫无作用。现在它是真的了：有声明、有读取、有生效。
+- **为什么这件事在本机很重要。** `ctk_fetch_and_index` 抓不到任何一个公网页面：所有 https 请求都因 `UNABLE_TO_VERIFY_LEAF_SIGNATURE` 失败，因为 Node 内置根证书不含本机的 TLS 拦截证书。插件甚至有一条分支专门**描述**这个失败（「A local interception certificate is the usual cause」），却没有提供任何修复途径。
+- **怎么做的。** `caPemPath` 指定信任链：`auto` = `<DSH_HOME>/context-mode/ca/windows-roots.pem`（本机导出的 Windows 根证书）；绝对路径 = 该 PEM；留空 = Node 默认根证书。配置了 bundle 时，抓取改走 `node:https` 并带上 `ca`（内置 `fetch` 无法按次指定 CA——它的 `dispatcher` 属于 undici，而这里 import 不到 undici），手工跟随重定向，并如实报出用的是哪份信任链。配置了却读不到的路径会在输出里明说，而不是静默回落——因为静默回落恰好会重现这个设置本要修复的故障。
+- **端到端已验证。** 默认信任链：`UNABLE_TO_VERIFY_LEAF_SIGNATURE`。注入该 bundle：HTTPS 200，且包含两跳重定向。`resolveCaBundle` 有四条断言覆盖 默认/真实文件/不可读路径/无证书文件；把实现回退掉，「resolves a real PEM file」会立刻失败。
+- 离线断言 92 项（新增 4 项），客户端 27 项，打包 20 项，发布门 34 项。
+
 ## 0.3.5
 - **修复：门禁四处绕过**。门禁判断的是「某段的命令词是不是 curl/wget」，因此凡合法地排在命令词前面的东西都必须先剥掉，否则它检查的是变量赋值并被判为安全。此前漏掉的：`FOO=1 curl …`、`PATH=/x curl …`（赋值前缀从未剥离）、`nice -n 5 curl …`、`timeout 30 curl …`（包装器自身选项被当成命令词）、`sudo FOO=1 curl …`（前缀上限 2 个 token）。现按「赋值 → 包装器 → 包装器选项 → 再赋值」的顺序剥离，并补 7 条必须拦、6 条必须放的断言；两条负向对照分别精确打掉赋值剥离与选项跳过。[`a6129be`]
 

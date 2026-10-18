@@ -4,6 +4,13 @@
 
 User-visible changes, newest first. Commit hashes in brackets.
 
+## 0.3.6
+- **Fixed: `caPemPath` was a setting that did nothing.** The key has been in this plugin's own `cordis.patch.yml` since the first commit, annotated "validated against the plugin's Config schema" - but it was never in the schema, never read anywhere in `index.js`, and never mentioned in either README. zod's loose mode let it through silently, so it looked configurable while having no effect whatsoever. It is now real: announced, read, and honoured.
+- **Why it matters here.** `ctk_fetch_and_index` could not fetch a single public page on this machine: every https request failed with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` because Node's built-in roots do not include the local TLS-inspection certificate. The plugin even had a branch that *described* that failure ("a local interception certificate is the usual cause") without offering any way to fix it.
+- **How it works.** `caPemPath` names the trust store: `auto` = `<DSH_HOME>/context-mode/ca/windows-roots.pem` (this machine's exported Windows roots), an absolute path = that PEM, empty = Node's default roots. When a bundle is configured, fetching goes through `node:https` with `ca` set (the built-in `fetch` cannot take a per-call CA - its `dispatcher` is undici's, and undici is not importable from a plugin here), follows redirects by hand, and reports which trust store it used. A configured path that cannot be read is reported in the output rather than silently falling back, because falling back would recreate the exact failure the setting exists to fix.
+- **Verified end to end.** With the default trust store: `UNABLE_TO_VERIFY_LEAF_SIGNATURE`. With the bundle injected: HTTPS 200, including a two-hop redirect. `resolveCaBundle` has four assertions covering default / real file / unreadable path / file without a certificate; reverting the implementation fails "resolves a real PEM file" immediately.
+- 92 offline assertions (4 new), 27 client, 20 package, 34 release gate.
+
 ## 0.3.5
 - **Fixed: four gate bypasses.** The gate asks whether the *command word* of a segment is a flood tool, so anything that legally precedes that word has to be peeled first — otherwise it inspects a variable assignment and calls it safe. Previously missed: `FOO=1 curl …`, `PATH=/x curl …` (assignment prefixes were never peeled), `nice -n 5 curl …`, `timeout 30 curl …` (a wrapper's own options were read as the command word), and `sudo FOO=1 curl …` (the prefix loop capped at two tokens). Prefixes are now peeled as assignment → wrapper → wrapper options → assignment, with seven must-block and six must-allow assertions; two negative controls knock out the assignment peel and the option skip respectively. [`a6129be`]
 

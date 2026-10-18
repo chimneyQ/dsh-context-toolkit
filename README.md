@@ -105,6 +105,7 @@ await ctk_search({ queries: ['rate limit', 'auth'] });  // only the relevant exc
 | `searchLimit` | `5` | Excerpts per query in `ctk_search` |
 | `snippetChars` | `900` | Character ceiling per excerpt |
 | `fetchMaxBytes` | `2000000` | Per-page fetch ceiling |
+| `caPemPath` | `auto` | TLS trust store for `ctk_fetch_and_index`: `auto` = `<DSH_HOME>/context-mode/ca/windows-roots.pem`, an absolute PEM path, or empty for Node's default roots. Set it when a TLS-inspecting proxy makes every https fetch fail on the certificate. |
 | `storageDir` | empty | Knowledge-base root; empty = `<DSH_HOME>/context-toolkit` |
 | `tools.*` | see below | Per-tool switches |
 

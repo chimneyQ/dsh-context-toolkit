@@ -18,6 +18,8 @@
  * no third-party runtime dependencies.
  */
 import { homedir } from 'node:os'
+import http from 'node:http'
+import https from 'node:https'
 import { existsSync, statSync, readdirSync, readFileSync } from 'node:fs'
 import { join, isAbsolute, resolve, basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -165,6 +167,8 @@ export const Config = z.object({
   searchLimit: z.number().min(1).default(5).volatile().description('ctk_search 每次查询返回的片段数上限'),
   snippetChars: z.number().min(100).default(900).volatile().description('ctk_search 每个片段的最大字符数'),
   fetchMaxBytes: z.number().min(1024).default(2000000).volatile().description('ctk_fetch_and_index 单页最大抓取字节'),
+  caPemPath: z.string().default('auto').volatile()
+    .description('ctk_fetch_and_index 的 TLS 信任链：auto = 用 <DSH_HOME>/context-mode/ca/windows-roots.pem（存在时）；也可给一份 PEM 的绝对路径；留空 = 用 Node 默认信任链'),
 })
 
 const VOLATILE_READ = Symbol.for('cosmokit.volatile.read')
@@ -217,6 +221,7 @@ export function apply(ctx, rawConfig) {
     searchLimit: 5,
     snippetChars: 900,
     fetchMaxBytes: 2000000,
+    caPemPath: 'auto',
     nudgeFetchTools: true,
     slimOutputs: true,
     slimMinBytes: SLIM_DEFAULTS.minBytes,
@@ -246,6 +251,7 @@ export function apply(ctx, rawConfig) {
     searchLimit: readVolatile(incoming.searchLimit, defaults.searchLimit),
     snippetChars: readVolatile(incoming.snippetChars, defaults.snippetChars),
     fetchMaxBytes: readVolatile(incoming.fetchMaxBytes, defaults.fetchMaxBytes),
+    caPemPath: readVolatile(incoming.caPemPath, defaults.caPemPath),
     nudgeFetchTools: readVolatile(incoming.nudgeFetchTools, defaults.nudgeFetchTools),
     slimOutputs: readVolatile(incoming.slimOutputs, defaults.slimOutputs),
     slimMinBytes: readVolatile(incoming.slimMinBytes, defaults.slimMinBytes),
@@ -1046,6 +1052,95 @@ export function htmlToText(html) {
  * local DNS interception, a refused connection is a blocked port, and those need
  * different remedies. The chain is walked so the report names the real problem.
  */
+/**
+ * The CA bundle ctk_fetch_and_index should trust, or undefined for the default.
+ *
+ * A machine behind a TLS-inspecting proxy cannot verify public certificates with
+ * Node's built-in roots, so every https fetch fails with
+ * UNABLE_TO_VERIFY_LEAF_SIGNATURE. `caPemPath` names the bundle to trust instead:
+ *
+ *   'auto'   the host's own exported Windows root store
+ *            (<DSH_HOME>/context-mode/ca/windows-roots.pem), when it exists
+ *   a path   that exact PEM file
+ *   ''       no override — Node's default roots, which is what a direct
+ *            connection needs
+ *
+ * A configured path that cannot be read is reported, never silently ignored:
+ * falling back to the default roots would turn a misconfiguration back into the
+ * very handshake failure this setting exists to fix.
+ */
+export function resolveCaBundle(setting, dshHomeDir) {
+  const choice = String(setting === undefined || setting === null ? '' : setting).trim()
+  if (choice === '') return { pem: undefined, source: 'default roots' }
+  const home = dshHomeDir || process.env.DSH_HOME || join(homedir(), '.dsh')
+  const auto = choice === 'auto'
+  const wanted = auto ? join(home, 'context-mode', 'ca', 'windows-roots.pem') : choice
+  try {
+    const pem = readFileSync(wanted, 'utf8')
+    if (!pem.includes('BEGIN CERTIFICATE')) {
+      return { pem: undefined, source: 'unreadable (' + wanted + ' holds no certificate)' }
+    }
+    return { pem, source: wanted }
+  } catch (error) {
+    return {
+      pem: undefined,
+      source: (auto ? 'auto: ' : '') + 'cannot read ' + wanted + ' (' + String(error && error.code || error) + ')',
+    }
+  }
+}
+
+/**
+ * GET a URL with an explicit TLS trust store, using only node:https.
+ *
+ * The built-in fetch() has no per-call way to supply a CA bundle: its
+ * `dispatcher` is undici's, and undici is not importable from a plugin here
+ * (ERR_MODULE_NOT_FOUND), so honouring `caPemPath` on fetch() is impossible
+ * without adding a dependency. node:https takes `ca` directly, so when a bundle
+ * is configured this path is used instead; with no bundle the caller keeps the
+ * plain fetch() it always had.
+ *
+ * @param url absolute http(s) URL.
+ * @param ca PEM text to trust, or undefined.
+ * @param maxBytes body cap.
+ * @returns { status, text } once the whole body is read.
+ */
+function httpsGetWithCa(url, ca, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url)
+    const lib = target.protocol === 'http:' ? http : https
+    const req = lib.get(target, {
+      ca,
+      timeout: 20000,
+      headers: { 'user-agent': 'dsh-context-toolkit', accept: '*/*' },
+    }, response => {
+      // Redirects are followed by hand: node:https does not do it, and the
+      // knowledge base wants the final document rather than the 302.
+      const status = Number(response.statusCode) || 0
+      const location = response.headers.location
+      if (status >= 300 && status < 400 && location) {
+        response.resume()
+        req.destroy()
+        resolve(httpsGetWithCa(new URL(location, target).toString(), ca, maxBytes))
+        return
+      }
+      const chunks = []
+      let bytes = 0
+      response.on('data', chunk => {
+        if (bytes >= maxBytes) { response.destroy(); return }
+        chunks.push(chunk)
+        bytes += chunk.length
+      })
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8').slice(0, maxBytes)
+        resolve({ status, text })
+      })
+      response.on('error', reject)
+    })
+    req.on('timeout', () => { req.destroy(new Error('the connection timed out')) })
+    req.on('error', reject)
+  })
+}
+
 export function describeFetchFailure(error, url) {
   const message = String((error && error.message) || error)
   const cause = error && error.cause ? error.cause : null
@@ -1234,20 +1329,33 @@ function registerKnowledgeTools(ctx, config, stats, store, log) {
           : (args.url ? [{ url: args.url, source: args.source }] : [])
         if (!list.length) return { text: 'provide requests[] or url', isError: true }
         const maxBytes = Math.max(1024, Number(config.fetchMaxBytes) || 2000000)
+        // Resolved once per call: reading an 800 KB PEM for every URL would cost
+        // more than the fetches it enables.
+        const ca = resolveCaBundle(config.caPemPath)
         const lines = ['## ctk_fetch_and_index']
+        if (ca.pem !== undefined) lines.push('- TLS: trusting ' + ca.source)
+        else if (String(config.caPemPath || '').trim() !== '') lines.push('- TLS: ' + ca.source + ' — falling back to default roots')
         let ok = 0
         for (const item of list) {
           const url = String(item.url || '')
           if (!/^https?:\/\//i.test(url)) { lines.push('- ' + url + ' — skipped: not an http(s) URL'); continue }
           try {
-            const response = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'dsh-context-toolkit' } })
-            const raw = await response.text()
-            const body = raw.length > maxBytes ? raw.slice(0, maxBytes) : raw
-            const text = htmlToText(body)
+            let status
+            let text
+            if (ca.pem !== undefined) {
+              const got = await httpsGetWithCa(url, ca.pem, maxBytes)
+              status = got.status
+              text = htmlToText(got.text)
+            } else {
+              const response = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'dsh-context-toolkit' } })
+              const raw = await response.text()
+              status = response.status
+              text = htmlToText(raw.length > maxBytes ? raw.slice(0, maxBytes) : raw)
+            }
             const result = store.indexDocument({ path: url, title: item.source || url, text })
             stats.bytesIndexed = (stats.bytesIndexed || 0) + result.bytes
             ok += 1
-            lines.push('- ' + url + ' — HTTP ' + response.status + '  ' + result.chunks + ' chunks  (' + result.bytes + ' B filed)')
+            lines.push('- ' + url + ' — HTTP ' + status + '  ' + result.chunks + ' chunks  (' + result.bytes + ' B filed)')
           } catch (error) {
             lines.push('- ' + url + ' — failed: ' + describeFetchFailure(error, url))
           }
